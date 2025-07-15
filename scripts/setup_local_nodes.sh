@@ -83,6 +83,12 @@ deploy_contracts() {
     
     echo -e "${YELLOW}Deploying contracts on $name (Chain $chain_id)...${NC}"
     
+    # Clone oif-contracts if it doesn't exist
+    if [ ! -d "oif-contracts" ]; then
+        echo -e "${YELLOW}Cloning oif-contracts repository...${NC}"
+        git clone https://github.com/openintentsframework/oif-contracts
+    fi
+    
     cd oif-contracts
     
     # Create a simple TestToken contract
