@@ -1,0 +1,52 @@
+[package]
+name = "solver-service"
+version.workspace = true
+edition.workspace = true
+authors.workspace = true
+license.workspace = true
+repository.workspace = true
+
+[[bin]]
+name = "oif-solver"
+path = "src/main.rs"
+
+[dependencies]
+# Core modules
+solver-types = { path = "../solver-types" }
+solver-core = { path = "../solver-core" }
+solver-config = { path = "../solver-config" }
+solver-monitoring = { path = "../solver-monitoring" }
+solver-chains = { path = "../solver-chains" }
+solver-discovery = { path = "../solver-discovery" }
+solver-orders = { path = "../solver-orders" }
+solver-delivery = { path = "../solver-delivery" }
+solver-state = { path = "../solver-state" }
+solver-settlement = { path = "../solver-settlement" }
+
+# Async runtime
+tokio = { workspace = true, features = ["full"] }
+
+# Web framework for API
+axum = { workspace = true }
+tower = { workspace = true }
+tower-http = { workspace = true, features = ["trace", "cors"] }
+
+# CLI
+clap = { workspace = true, features = ["derive", "env"] }
+
+# Logging
+tracing = { workspace = true }
+tracing-subscriber = { workspace = true, features = ["env-filter"] }
+
+# Error handling
+anyhow = { workspace = true }
+
+# Serialization
+serde = { workspace = true }
+serde_json = { workspace = true }
+
+# Utilities
+futures = { workspace = true }
+chrono = { workspace = true }
+toml = { workspace = true }
+ethers = { workspace = true }

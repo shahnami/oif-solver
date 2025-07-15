@@ -1,0 +1,13 @@
+[package]
+name = "solver-strategies"
+version.workspace = true
+edition.workspace = true
+authors.workspace = true
+license.workspace = true
+repository.workspace = true
+
+[dependencies]
+solver-types = { path = "../solver-types" }
+tokio = { workspace = true }
+async-trait = { workspace = true }
+tracing = { workspace = true }

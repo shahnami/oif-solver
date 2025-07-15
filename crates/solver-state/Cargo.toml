@@ -1,0 +1,33 @@
+[package]
+name = "solver-state"
+version.workspace = true
+edition.workspace = true
+authors.workspace = true
+license.workspace = true
+repository.workspace = true
+
+[dependencies]
+solver-types = { path = "../solver-types" }
+solver-discovery = { path = "../solver-discovery" }
+solver-orders = { path = "../solver-orders" }
+
+# Async
+tokio = { workspace = true, features = ["fs"] }
+async-trait = { workspace = true }
+futures = { workspace = true }
+
+# Data structures
+priority-queue = { workspace = true }
+dashmap = { workspace = true }
+
+# Serialization
+serde = { workspace = true }
+serde_json = { workspace = true }
+
+# Utilities
+tracing = { workspace = true }
+chrono = { workspace = true }
+thiserror = { workspace = true }
+
+[dev-dependencies]
+tempfile = { workspace = true }

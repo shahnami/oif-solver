@@ -1,0 +1,34 @@
+[package]
+name = "solver-delivery"
+version.workspace = true
+edition.workspace = true
+authors.workspace = true
+license.workspace = true
+repository.workspace = true
+
+[dependencies]
+solver-types = { path = "../solver-types" }
+solver-chains = { path = "../solver-chains" }
+
+# Async
+tokio = { workspace = true }
+async-trait = { workspace = true }
+
+# HTTP client
+reqwest = { workspace = true, features = ["json"] }
+
+# Serialization
+serde = { workspace = true }
+serde_json = { workspace = true }
+
+# Error handling
+thiserror = { workspace = true }
+anyhow = { workspace = true }
+
+# Utilities
+tracing = { workspace = true }
+hex = { workspace = true }
+
+# Keep these for future implementations
+ethers = { workspace = true }
+alloy = { workspace = true }

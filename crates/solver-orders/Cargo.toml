@@ -1,0 +1,34 @@
+[package]
+name = "solver-orders"
+version.workspace = true
+edition.workspace = true
+authors.workspace = true
+license.workspace = true
+repository.workspace = true
+
+[dependencies]
+solver-types = { path = "../solver-types" }
+
+# Async runtime
+tokio = { workspace = true }
+async-trait = { workspace = true }
+
+# Ethereum
+ethers = { workspace = true, features = ["eip712"] }
+
+# Serialization
+serde = { workspace = true }
+serde_json = { workspace = true }
+
+# Error handling
+thiserror = { workspace = true }
+anyhow = { workspace = true }
+
+# Utilities
+tracing = { workspace = true }
+dashmap = { workspace = true }
+chrono = { workspace = true }
+
+# EIP-712 for order signing
+hex = { workspace = true }
+sha3 = { workspace = true }

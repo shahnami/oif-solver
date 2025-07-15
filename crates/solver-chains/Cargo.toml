@@ -1,0 +1,38 @@
+[package]
+name = "solver-chains"
+version.workspace = true
+edition.workspace = true
+authors.workspace = true
+license.workspace = true
+repository.workspace = true
+
+[dependencies]
+solver-types = { path = "../solver-types" }
+
+# Async runtime
+tokio = { workspace = true }
+async-trait = { workspace = true }
+
+# Ethereum
+ethers = { workspace = true, features = ["ws", "ipc"] }
+alloy = { workspace = true }
+
+# Serialization
+serde = { workspace = true }
+serde_json = { workspace = true }
+
+# Error handling
+thiserror = { workspace = true }
+anyhow = { workspace = true }
+
+# Utilities
+tracing = { workspace = true }
+dashmap = { workspace = true }
+futures = { workspace = true }
+tokio-stream = { workspace = true }
+
+# Retry logic
+backoff = { workspace = true }
+
+# Async stream
+async-stream = { workspace = true }

@@ -1,0 +1,43 @@
+[package]
+name = "solver-discovery"
+version.workspace = true
+edition.workspace = true
+authors.workspace = true
+license.workspace = true
+repository.workspace = true
+
+[dependencies]
+solver-types = { path = "../solver-types" }
+solver-chains = { path = "../solver-chains" }
+solver-orders = { path = "../solver-orders" }
+
+# Async runtime
+tokio.workspace = true
+async-trait.workspace = true
+futures.workspace = true
+tokio-stream.workspace = true
+
+# Ethereum
+ethers.workspace = true
+
+# Serialization
+serde.workspace = true
+serde_json.workspace = true
+
+# Error handling
+thiserror.workspace = true
+anyhow.workspace = true
+
+# Utilities
+tracing.workspace = true
+dashmap.workspace = true
+chrono.workspace = true
+
+# For async streams
+async-stream.workspace = true
+
+# For hashing
+sha3.workspace = true
+
+# For hex encoding
+hex.workspace = true

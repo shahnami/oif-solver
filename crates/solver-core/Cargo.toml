@@ -1,0 +1,29 @@
+[package]
+name = "solver-core"
+version.workspace = true
+edition.workspace = true
+authors.workspace = true
+license.workspace = true
+repository.workspace = true
+
+[dependencies]
+solver-types = { path = "../solver-types" }
+solver-chains = { path = "../solver-chains" }
+solver-delivery = { path = "../solver-delivery" }
+solver-settlement = { path = "../solver-settlement" }
+solver-state = { path = "../solver-state" }
+solver-discovery = { path = "../solver-discovery" }
+solver-config = { path = "../solver-config" }
+solver-monitoring = { path = "../solver-monitoring" }
+solver-orders = { path = "../solver-orders" }
+
+tokio = { workspace = true }
+async-trait = { workspace = true }
+tracing = { workspace = true }
+dashmap = { workspace = true }
+arc-swap = { workspace = true }
+serde = { workspace = true }
+ethers = { workspace = true }
+chrono = { workspace = true }
+futures = { workspace = true }
+anyhow = { workspace = true }
