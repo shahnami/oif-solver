@@ -1,6 +1,6 @@
 // solver-types/src/plugins/delivery.rs
 
-use crate::PluginConfig;
+use crate::{PluginConfig, RetryConfig};
 
 use super::{Address, BasePlugin, ChainId, PluginResult, Timestamp, TxHash};
 use async_trait::async_trait;
@@ -23,6 +23,31 @@ pub struct Transaction {
 	pub chain_id: ChainId,
 }
 
+/// Unified transaction request that can represent both fills and settlements
+#[derive(Debug, Clone)]
+pub struct TransactionRequest {
+	pub transaction: Transaction,
+	pub priority: TransactionPriority,
+	pub request_type: TransactionRequestType,
+	pub metadata: TransactionMetadata,
+	pub retry_config: Option<RetryConfig>,
+}
+
+/// Type of transaction request
+#[derive(Debug, Clone)]
+pub enum TransactionRequestType {
+	Fill {
+		order_id: String,
+		order_type: String,
+	},
+	Settlement {
+		order_id: String,
+		fill_id: String,
+		settlement_type: super::settlement::SettlementType,
+		expected_reward: u64,
+	},
+}
+
 /// Delivery request with transaction and metadata
 #[derive(Debug, Clone)]
 pub struct DeliveryRequest {
@@ -30,6 +55,20 @@ pub struct DeliveryRequest {
 	pub priority: DeliveryPriority,
 	pub metadata: DeliveryMetadata,
 	pub retry_config: Option<RetryConfig>,
+}
+
+/// Unified priority type for all transactions
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub enum TransactionPriority {
+	Low,
+	Normal,
+	High,
+	Urgent,
+	Custom {
+		max_fee: u64,
+		priority_fee: u64,
+		deadline: Option<Timestamp>,
+	},
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -45,31 +84,22 @@ pub enum DeliveryPriority {
 	},
 }
 
+/// Unified metadata for all transaction types
+#[derive(Debug, Clone, Default)]
+pub struct TransactionMetadata {
+	pub order_id: String,
+	pub user: Address,
+	pub source: String, // e.g., "eip7683_onchain"
+	pub tags: Vec<String>,
+	pub custom_fields: HashMap<String, String>,
+}
+
 #[derive(Debug, Clone, Default)]
 pub struct DeliveryMetadata {
 	pub order_id: String,
 	pub user: Address,
 	pub tags: Vec<String>,
 	pub custom_fields: HashMap<String, String>,
-}
-
-#[derive(Debug, Clone)]
-pub struct RetryConfig {
-	pub max_attempts: u32,
-	pub initial_delay_ms: u64,
-	pub max_delay_ms: u64,
-	pub backoff_multiplier: f64,
-}
-
-impl Default for RetryConfig {
-	fn default() -> Self {
-		Self {
-			max_attempts: 3,
-			initial_delay_ms: 1000,
-			max_delay_ms: 30000,
-			backoff_multiplier: 2.0,
-		}
-	}
 }
 
 /// Delivery response with transaction hash and status

@@ -12,8 +12,8 @@ use crate::plugins::{Address, ChainId, Timestamp, TxHash};
 pub enum Event {
 	Discovery(DiscoveryEvent),
 	OrderCreated(OrderEvent),
-	OrderFilled(FillEvent),
-	SettlementComplete(SettlementEvent),
+	OrderFill(FillEvent),
+	Settlement(SettlementEvent),
 	ServiceStatus(StatusEvent),
 }
 
@@ -29,7 +29,7 @@ pub struct OrderEvent {
 	pub raw_data: Bytes,                   // Raw event data for parsing
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
 pub struct FillEvent {
 	pub order_id: String,
 	pub fill_id: String,
@@ -37,16 +37,18 @@ pub struct FillEvent {
 	pub tx_hash: TxHash,
 	pub timestamp: Timestamp,
 	pub status: FillStatus,
+	pub source: String, // e.g., "eip7683_onchain", inherited from OrderEvent
+	pub order_data: Option<Bytes>, // Raw order data for settlement
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize, PartialEq)]
 pub enum FillStatus {
 	Pending,
 	Confirmed,
 	Failed(String),
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
 pub struct SettlementEvent {
 	pub order_id: String,
 	pub settlement_id: String,

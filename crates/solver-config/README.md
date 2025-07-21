@@ -1,431 +1,327 @@
-# solver-config
+# Solver Config - Configuration Management System
 
-## Overview
+The `solver-config` crate provides a simple yet powerful configuration loading system for the OIF solver. It handles TOML file parsing, environment variable substitution, and validation to ensure the solver starts with a valid configuration.
 
-The `solver-config` module handles configuration parsing, validation, and hot-reloading for the OIF solver. It provides a flexible configuration system that supports multiple sources (files, environment variables, CLI arguments) with schema validation and runtime updates.
+## 🏗️ Architecture Overview
 
-## Architecture
+```text
+┌─────────────────────────────────────────────────────────────────────────┐
+│                         CONFIG LOADER                                    │
+│  ┌───────────────────────────────────────────────────────────────────┐  │
+│  │                    Loading Pipeline                                │  │
+│  │  ┌─────────────┐  ┌──────────────┐  ┌────────────────────────┐  │  │
+│  │  │ TOML File   │  │ Env Variable │  │   Validation           │  │  │
+│  │  │ Loading     │─▶│ Substitution │─▶│   & Override           │  │  │
+│  │  └─────────────┘  └──────────────┘  └────────────────────────┘  │  │
+│  └───────────────────────────────────────────────────────────────────┘  │
+│                                                                          │
+│  ┌───────────────────────────────────────────────────────────────────┐  │
+│  │                  Configuration Flow                                │  │
+│  │                                                                    │  │
+│  │   config.toml ─┐                                                  │  │
+│  │                 ├─▶ ConfigLoader ─▶ SolverConfig ─▶ Services     │  │
+│  │   ENV vars ────┘                                                  │  │
+│  └───────────────────────────────────────────────────────────────────┘  │
+└─────────────────────────────────────────────────────────────────────────┘
+```
 
-### Core Components
+## 📁 Module Structure
 
-1. **ConfigLoader** - Merges configuration from multiple sources
-2. **ConfigSchema** - Defines and validates configuration structure
-3. **ConfigWatcher** - Monitors and applies configuration changes
-4. **ConfigSources** - File, environment, and CLI configuration sources
+```
+solver-config/
+├── src/
+│   └── lib.rs          # Configuration loader implementation
+├── config/             # Example configurations (in parent)
+│   ├── example.toml    # Example with all options
+│   └── local.toml      # Local development config
+├── Cargo.toml
+└── README.md
+```
 
-### Design Principles
+## 🔑 Key Components
 
-- **Layered Configuration**: Override precedence (CLI > ENV > File)
-- **Type Safety**: Strongly typed configuration structures
-- **Validation First**: Schema validation before deserialization
-- **Hot Reload**: Update configuration without restart
-- **Backward Compatibility**: Graceful handling of old configs
+### 1. **ConfigLoader** (`lib.rs`)
 
-## Structure
+The main configuration loading struct that orchestrates the loading process:
 
 ```rust
-// Main configuration structure
-#[derive(Debug, Deserialize, Serialize, Validate)]
-pub struct Config {
-    // Core settings
-    pub solver_name: String,
-    pub log_level: String,
-    pub http_port: u16,
-    pub metrics_port: u16,
-
-    // Order types to support
-    pub order_types: Vec<String>,
-
-    // Component configs
-    pub state: StateConfig,
-    pub discovery: DiscoveryConfig,
-    pub delivery: DeliveryConfig,
-    pub settlement: SettlementConfig,
-}
-
-// Component-specific configurations
-#[derive(Debug, Deserialize, Serialize)]
-pub struct StateConfig {
-    #[serde(rename = "type")]
-    pub backend_type: String,
-    pub max_items: Option<usize>,
-    pub ttl_seconds: Option<u64>,
-}
-
-#[derive(Debug, Deserialize, Serialize)]
-pub struct DiscoveryConfig {
-    pub sources: Vec<String>,
-    #[serde(flatten)]
-    pub source_configs: HashMap<String, Value>,
+pub struct ConfigLoader {
+    file_path: Option<String>,    // Path to TOML config file
+    env_prefix: String,           // Prefix for env var overrides (default: "SOLVER_")
 }
 ```
 
-## Abstractions
+**Key Responsibilities:**
 
-### Configuration Sources
+- Load and parse TOML configuration files
+- Substitute environment variables in config values
+- Apply environment variable overrides
+- Validate required plugins are enabled
+
+### 2. **Configuration Pipeline**
+
+The loading process follows these steps:
+
+```text
+1. Load TOML File
+      ↓
+2. Substitute ${VAR_NAME} placeholders
+      ↓
+3. Apply SOLVER_* env overrides
+      ↓
+4. Validate configuration
+      ↓
+5. Return SolverConfig
+```
+
+### 3. **Error Handling**
+
+Well-defined error types for configuration issues:
 
 ```rust
-#[async_trait]
-pub trait ConfigSource: Send + Sync {
-    async fn load(&self) -> Result<Value>;
-    fn priority(&self) -> i32;
-}
-
-// File-based configuration
-pub struct FileSource {
-    path: PathBuf,
-    format: ConfigFormat,
-}
-
-// Environment variable configuration
-pub struct EnvSource {
-    prefix: String,
-}
-
-// Command-line arguments
-pub struct CliSource {
-    args: Vec<String>,
+pub enum ConfigError {
+    FileNotFound(String),      // Config file doesn't exist
+    ParseError(String),        // TOML parsing failed
+    ValidationError(String),   // Config validation failed
+    EnvVarNotFound(String),   // Required env var missing
+    IoError(std::io::Error),  // File system errors
 }
 ```
 
-### Configuration Validation
+## 🔄 Configuration Loading Flow
 
-```rust
-pub trait ConfigValidator: Send + Sync {
-    fn validate(&self, config: &Value) -> Result<()>;
-}
-
-pub struct SchemaValidator {
-    schema: JsonSchema,
-}
-
-pub struct BusinessRuleValidator {
-    rules: Vec<Box<dyn ValidationRule>>,
-}
+```text
+┌──────────────────┐     ┌──────────────────┐     ┌──────────────────┐
+│   config.toml    │────▶│  Read & Parse    │────▶│  Env Variable    │
+│                  │     │   TOML File      │     │  Substitution    │
+└──────────────────┘     └──────────────────┘     └──────────────────┘
+                                                            │
+                                                            ▼
+┌──────────────────┐     ┌──────────────────┐     ┌──────────────────┐
+│  SolverConfig    │◀────│    Validate      │◀────│   Apply Env      │
+│   (validated)    │     │  Configuration   │     │   Overrides      │
+└──────────────────┘     └──────────────────┘     └──────────────────┘
 ```
 
-## Usage
-
-### Basic Usage
+## 🚀 Usage Example
 
 ```rust
-// Load configuration
-let loader = ConfigLoader::new()
-    .with_source(FileSource::new("config.toml"))
-    .with_source(EnvSource::with_prefix("SOLVER_"))
-    .with_validator(SchemaValidator::default());
+use solver_config::ConfigLoader;
 
-let config: Config = loader.load().await?;
+// Basic usage
+let config = ConfigLoader::new()
+    .with_file("config/local.toml")
+    .load()
+    .await?;
 
-// Use configuration
-let solver = Solver::builder()
-    .with_config(config)
-    .build()?;
+// With custom environment prefix
+let config = ConfigLoader::new()
+    .with_file("config/production.toml")
+    .with_env_prefix("MY_SOLVER_")
+    .load()
+    .await?;
 ```
 
-### Configuration File Example
+## 📝 Configuration File Format
+
+The configuration uses TOML format with the following structure:
 
 ```toml
-# config.toml
-solver_name = "production-solver"
+# Main solver settings
+[solver]
+name = "my-solver"
 log_level = "info"
 http_port = 8080
 metrics_port = 9090
 
-order_types = ["eip7683", "uniswapx"]
+# Plugin configurations
+[plugins.state.memory_state]
+enabled = true
+plugin_type = "memory"
+[plugins.state.memory_state.config]
+max_entries = 10000
+
+[plugins.delivery.eth_delivery]
+enabled = true
+plugin_type = "evm_ethers"
+[plugins.delivery.eth_delivery.config]
+chain_id = 1
+rpc_url = "https://eth-mainnet.g.alchemy.com/v2/${ALCHEMY_KEY}"
+private_key = "${SOLVER_PRIVATE_KEY}"
+
+# Service configurations
+[discovery]
+historical_sync = false
+realtime_monitoring = true
+max_event_age_seconds = 3600
 
 [state]
-type = "redis://localhost:6379"
-max_items = 10000
-ttl_seconds = 3600
-
-[discovery]
-sources = ["onchain", "webhook"]
-
-[discovery.onchain]
-chain_id = 1
-contracts = ["0x1234...", "0x5678..."]
-start_block = 18000000
-poll_interval = "12s"
-
-[discovery.webhook]
-port = 8081
-auth_token = "${WEBHOOK_AUTH_TOKEN}"
-
-[delivery]
-methods = ["rpc", "flashbots"]
-strategy = "fastest"
-
-[delivery.rpc]
-endpoints = { 1 = "https://eth.rpc", 137 = "https://polygon.rpc" }
-max_retries = 3
-
-[settlement]
-strategy = "direct"
-oracle_address = "0x..."
-claim_delay = "1h"
+default_backend = "memory_state"
+cleanup_interval_seconds = 300
 ```
 
-### Environment Variables
+## 🌍 Environment Variable Support
+
+### Variable Substitution
+
+Use `${VAR_NAME}` syntax in TOML values:
+
+```toml
+rpc_url = "https://eth-mainnet.g.alchemy.com/v2/${ALCHEMY_KEY}"
+private_key = "${SOLVER_PRIVATE_KEY}"
+```
+
+### Environment Overrides
+
+Override specific configuration values with environment variables:
 
 ```bash
-# Override configuration via environment
+# Override solver settings
 export SOLVER_LOG_LEVEL=debug
-export SOLVER_STATE_TYPE=memory
-export SOLVER_DISCOVERY_SOURCES=webhook
 export SOLVER_HTTP_PORT=8888
+export SOLVER_METRICS_PORT=9999
+
+# These will override values in the TOML file
 ```
 
-### Hot Reload
+Currently supported overrides:
 
-```rust
-// Create config watcher
-let watcher = ConfigWatcher::new(loader)
-    .with_interval(Duration::from_secs(30))
-    .on_change(|old_config, new_config| {
-        info!("Configuration updated");
-        solver.update_config(new_config).await?;
-    });
+- `SOLVER_LOG_LEVEL` - Override log level
+- `SOLVER_HTTP_PORT` - Override HTTP API port
+- `SOLVER_METRICS_PORT` - Override metrics port
 
-// Start watching
-watcher.start().await?;
+## 🔍 Critical Observations
+
+### Strengths:
+
+1. **Simple Design**: Straightforward loading without over-engineering
+2. **Environment Support**: Both substitution and override mechanisms
+3. **Clear Errors**: Well-defined error types with context
+4. **Async Loading**: Non-blocking file operations
+5. **Validation**: Ensures required plugins are enabled
+
+### Areas of Concern:
+
+1. **Limited Overrides**: Only 3 fields support env overrides
+2. **No Hot Reload**: Changes require restart
+3. **No Schema Validation**: Beyond basic plugin checks
+4. **Regex Performance**: Compiles regex on every substitution
+5. **No Config Merging**: Can't layer multiple config files
+
+### Actual vs Documented Implementation:
+
+The existing README describes a much more complex system than what's implemented:
+
+- ❌ No ConfigWatcher for hot reload
+- ❌ No multiple configuration sources
+- ❌ No schema validation
+- ❌ No configuration history
+- ✅ Simple TOML loading with env vars (actual implementation)
+
+## 🔗 Dependencies
+
+### Internal Crates:
+
+- `solver-types`: Imports `SolverConfig` type definition
+
+### External Dependencies:
+
+- `tokio`: Async file operations
+- `toml`: TOML parsing
+- `regex`: Environment variable pattern matching
+- `thiserror`: Error type derivation
+- `serde`/`serde_json`: Serialization (though JSON not used)
+
+### Dependency Concerns:
+
+1. **Unused serde_json**: Imported but only TOML is used
+2. **Regex Overhead**: Could use simpler string matching
+3. **Missing config crate**: Could use standard config management
+
+## 🏃 Runtime Behavior
+
+### Loading Sequence:
+
+1. **File Reading**: Async read of TOML file
+2. **Variable Substitution**: Replace ${VAR} patterns
+3. **TOML Parsing**: Deserialize to SolverConfig
+4. **Override Application**: Apply SOLVER\_\* env vars
+5. **Validation**: Check required plugins enabled
+
+### Error Handling:
+
+- File not found → Clear error with path
+- Missing env var → Shows variable name
+- Parse errors → TOML error details
+- Validation → Specific requirement failures
+
+## 🐛 Known Issues & Cruft
+
+1. **Regex Compilation**: Regex compiled on every load (line 89)
+2. **Limited Validation**: Only checks enabled plugins, not configs
+3. **Hardcoded Overrides**: Override fields hardcoded in apply_env_overrides
+4. **No Default File**: Must explicitly specify config file
+5. **Unused Dependencies**: serde_json imported but not used
+
+## 🔮 Future Improvements
+
+1. **Expand Env Overrides**: Support all configuration fields
+2. **Config Validation**: JSON Schema or similar validation
+3. **Hot Reload**: Watch config file for changes
+4. **Multiple Sources**: Layer configs (defaults → file → env → CLI)
+5. **Config Templates**: Generate example configs
+6. **Encrypted Secrets**: Support for encrypted values
+7. **Remote Config**: Fetch from HTTP/S3/etcd
+
+## 📊 Performance Considerations
+
+- **Regex Cost**: Pattern matching for every substitution
+- **File I/O**: Async but still blocks on parse
+- **Validation**: Minimal overhead (just enabled checks)
+- **Memory**: Entire config held in memory
+
+## ⚠️ Security Considerations
+
+- **Private Keys**: Stored in plaintext in config
+- **Env Var Exposure**: All env vars accessible
+- **No Encryption**: Sensitive data unprotected
+- **File Permissions**: No checks on config file access
+- **Injection Risk**: Env var substitution could be exploited
+
+## 📋 Configuration Examples
+
+### Minimal Configuration:
+
+```toml
+[solver]
+name = "minimal-solver"
+log_level = "info"
+http_port = 8080
+metrics_port = 9090
+
+[plugins.state.memory]
+enabled = true
+plugin_type = "memory"
+
+[plugins.delivery.local]
+enabled = true
+plugin_type = "evm_ethers"
+[plugins.delivery.local.config]
+chain_id = 1
+rpc_url = "http://localhost:8545"
+private_key = "${PRIVATE_KEY}"
+
+[discovery]
+realtime_monitoring = true
+
+[state]
+default_backend = "memory"
+
+[delivery]
+strategy = "RoundRobin"
+
+[settlement]
+default_strategy = "direct"
 ```
 
-## Pros
-
-1. **Flexibility**: Multiple configuration sources
-2. **Validation**: Catch errors before runtime
-3. **Hot Reload**: Update without downtime
-4. **Type Safety**: Compile-time guarantees
-5. **Environment Support**: Easy deployment configuration
-
-## Cons
-
-1. **Complexity**: Multiple layers of configuration
-2. **Validation Overhead**: Schema checking adds startup time
-3. **Merge Conflicts**: Complex override rules
-4. **Type Constraints**: Some dynamic configs harder to express
-
-## Implementation Details
-
-### Configuration Merging
-
-```rust
-impl ConfigLoader {
-    pub async fn load<T: DeserializeOwned + Validate>(&self) -> Result<T> {
-        let mut sources: Vec<_> = self.sources.iter().collect();
-        sources.sort_by_key(|s| s.priority());
-
-        let mut config = Value::Object(Map::new());
-
-        // Merge in priority order
-        for source in sources {
-            let value = source.load().await?;
-            merge_values(&mut config, value);
-        }
-
-        // Expand environment variables
-        expand_env_vars(&mut config)?;
-
-        // Validate against schema
-        for validator in &self.validators {
-            validator.validate(&config)?;
-        }
-
-        // Deserialize and validate
-        let result: T = serde_json::from_value(config)?;
-        result.validate()?;
-
-        Ok(result)
-    }
-}
-
-fn merge_values(base: &mut Value, other: Value) {
-    match (base, other) {
-        (Value::Object(base_map), Value::Object(other_map)) => {
-            for (key, value) in other_map {
-                match base_map.get_mut(&key) {
-                    Some(base_value) => merge_values(base_value, value),
-                    None => { base_map.insert(key, value); }
-                }
-            }
-        }
-        (base, other) => *base = other,
-    }
-}
-```
-
-### Environment Variable Expansion
-
-```rust
-fn expand_env_vars(value: &mut Value) -> Result<()> {
-    match value {
-        Value::String(s) => {
-            if s.starts_with("${") && s.ends_with("}") {
-                let var_name = &s[2..s.len()-1];
-                *s = env::var(var_name)
-                    .map_err(|_| Error::MissingEnvVar(var_name.to_string()))?;
-            }
-        }
-        Value::Object(map) => {
-            for (_, v) in map.iter_mut() {
-                expand_env_vars(v)?;
-            }
-        }
-        Value::Array(arr) => {
-            for v in arr.iter_mut() {
-                expand_env_vars(v)?;
-            }
-        }
-        _ => {}
-    }
-    Ok(())
-}
-```
-
-### Schema Validation
-
-```rust
-impl SchemaValidator {
-    pub fn new() -> Self {
-        let schema = json!({
-            "$schema": "http://json-schema.org/draft-07/schema#",
-            "type": "object",
-            "required": ["solver_name", "order_types", "state", "discovery", "delivery", "settlement"],
-            "properties": {
-                "solver_name": { "type": "string" },
-                "log_level": { "enum": ["trace", "debug", "info", "warn", "error"] },
-                "http_port": { "type": "integer", "minimum": 1, "maximum": 65535 },
-                "order_types": {
-                    "type": "array",
-                    "items": { "type": "string" },
-                    "minItems": 1
-                },
-                "state": {
-                    "type": "object",
-                    "required": ["type"],
-                    "properties": {
-                        "type": { "type": "string" },
-                        "max_items": { "type": "integer", "minimum": 1 },
-                        "ttl_seconds": { "type": "integer", "minimum": 1 }
-                    }
-                }
-            }
-        });
-
-        Self {
-            schema: JSONSchema::compile(&schema).unwrap()
-        }
-    }
-}
-```
-
-### Configuration Updates
-
-```rust
-#[derive(Debug, Deserialize)]
-pub struct ConfigUpdates {
-    pub log_level: Option<String>,
-    pub discovery: Option<DiscoveryUpdates>,
-    pub delivery: Option<DeliveryUpdates>,
-}
-
-impl Config {
-    pub fn apply_updates(&mut self, updates: ConfigUpdates) -> Result<()> {
-        if let Some(log_level) = updates.log_level {
-            self.validate_log_level(&log_level)?;
-            self.log_level = log_level;
-        }
-
-        if let Some(discovery) = updates.discovery {
-            self.discovery.apply_updates(discovery)?;
-        }
-
-        if let Some(delivery) = updates.delivery {
-            self.delivery.apply_updates(delivery)?;
-        }
-
-        Ok(())
-    }
-}
-```
-
-### File Watching
-
-```rust
-pub struct ConfigWatcher {
-    loader: ConfigLoader,
-    interval: Duration,
-    callbacks: Vec<Box<dyn Fn(&Config, &Config) + Send + Sync>>,
-    current_config: Arc<RwLock<Config>>,
-}
-
-impl ConfigWatcher {
-    pub async fn start(self) -> Result<()> {
-        let mut interval = tokio::time::interval(self.interval);
-
-        loop {
-            interval.tick().await;
-
-            match self.loader.load::<Config>().await {
-                Ok(new_config) => {
-                    let current = self.current_config.read().await;
-                    
-                    if !configs_equal(&current, &new_config) {
-                        info!("Configuration change detected");
-                        
-                        for callback in &self.callbacks {
-                            callback(&current, &new_config);
-                        }
-                        
-                        drop(current);
-                        *self.current_config.write().await = new_config;
-                    }
-                }
-                Err(e) => {
-                    warn!("Failed to reload configuration: {}", e);
-                }
-            }
-        }
-    }
-}
-```
-
-## Error Handling
-
-```rust
-#[derive(Error, Debug)]
-pub enum ConfigError {
-    #[error("File not found: {0}")]
-    FileNotFound(PathBuf),
-    
-    #[error("Invalid format: {0}")]
-    InvalidFormat(String),
-    
-    #[error("Validation failed: {0}")]
-    ValidationFailed(String),
-    
-    #[error("Missing environment variable: {0}")]
-    MissingEnvVar(String),
-    
-    #[error("Schema violation: {0}")]
-    SchemaViolation(String),
-}
-```
-
-## Metrics
-
-The module exposes metrics for monitoring:
-
-- `config_reload_total` - Configuration reload attempts
-- `config_reload_success_total` - Successful reloads
-- `config_validation_duration_seconds` - Validation time
-- `config_source_errors_total` - Errors by source
-
-## Future Enhancements
-
-1. **Remote Configuration**: Fetch from etcd/Consul
-2. **Configuration History**: Track changes over time
-3. **A/B Testing**: Multiple configuration variants
-4. **Feature Flags**: Dynamic feature toggles
-5. **Configuration UI**: Web interface for updates
+The `solver-config` crate provides a focused, practical configuration loading solution that prioritizes simplicity over features, making it easy to understand and maintain while providing the essential functionality needed for the solver.

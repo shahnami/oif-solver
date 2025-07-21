@@ -31,6 +31,9 @@ pub enum CoreError {
 	#[error("Channel error: {0}")]
 	Channel(String),
 
+	#[error("Serialization error: {0}")]
+	Serialization(String),
+
 	#[error("Shutdown error: {0}")]
 	Shutdown(String),
 

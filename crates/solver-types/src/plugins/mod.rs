@@ -46,6 +46,9 @@ pub enum PluginError {
 	#[error("State error: {0}")]
 	StateError(String),
 
+	#[error("Serialization error: {0}")]
+	SerializationError(String),
+
 	#[error("Network error: {0}")]
 	NetworkError(String),
 }

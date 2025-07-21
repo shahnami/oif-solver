@@ -1,6 +1,6 @@
 // solver-types/src/plugins/settlement.rs
 
-use crate::PluginConfig;
+use crate::{PluginConfig, RetryConfig};
 
 use super::{delivery::Transaction, Address, BasePlugin, ChainId, PluginResult, Timestamp, TxHash};
 use async_trait::async_trait;
@@ -32,6 +32,16 @@ pub struct SettlementTransaction {
 	pub metadata: SettlementMetadata,
 }
 
+/// Settlement parameters returned by OrderProcessor
+/// This is a simplified version used to bridge order processing and settlement
+#[derive(Debug, Clone)]
+pub struct SettlementRequest {
+	pub transaction: SettlementTransaction,
+	pub priority: SettlementPriority,
+	pub preferred_strategy: Option<String>,
+	pub retry_config: Option<RetryConfig>,
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize, Hash, Eq, PartialEq)]
 pub enum SettlementType {
 	Direct,         // Direct settlement on origin chain
@@ -45,10 +55,8 @@ pub enum SettlementType {
 #[derive(Debug, Clone)]
 pub struct SettlementMetadata {
 	pub order_id: String,
-	pub fill_hash: TxHash,
 	pub strategy: String,
 	pub expected_confirmations: u32,
-	pub timeout: Option<Timestamp>,
 	pub custom_fields: HashMap<String, String>,
 }
 
@@ -87,7 +95,7 @@ pub struct SettlementStrategy {
 	pub strategy_type: SettlementType,
 	pub priority: SettlementPriority,
 	pub conditions: SettlementConditions,
-	pub retry_config: SettlementRetryConfig,
+	pub retry_config: RetryConfig,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -104,13 +112,6 @@ pub struct SettlementConditions {
 	pub max_gas_price: Option<u64>,
 	pub min_reward: Option<u64>,
 	pub timeout: Option<u64>, // seconds
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct SettlementRetryConfig {
-	pub max_attempts: u32,
-	pub delay_between_attempts: u64, // seconds
-	pub exponential_backoff: bool,
 }
 
 /// Settlement estimation

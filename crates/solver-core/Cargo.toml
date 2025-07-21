@@ -20,12 +20,14 @@ solver-config = { path = "../solver-config" }
 solver-state = { path = "../solver-state" }
 solver-discovery = { path = "../solver-discovery" }
 solver-delivery = { path = "../solver-delivery" }
+solver-settlement = { path = "../solver-settlement" }
 solver-plugin = { path = "../solver-plugin" }
 
 # Other dependencies
 futures = "0.3"
 dashmap = "5.5"
 parking_lot = "0.12"
+chrono = { version = "0.4", features = ["serde"] }
 
 [dev-dependencies]
 mockall = "0.12"

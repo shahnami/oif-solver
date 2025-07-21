@@ -341,12 +341,25 @@ plugin_type = "eip7683_order"
 [plugins.order.eip7683_order.config]
 solver_address = "$PUBLIC_KEY"
 output_settler_address = "$OUTPUT_SETTLER_ADDRESS"
+input_settler_addresses = ["$SETTLER_ADDRESS"]
 max_order_age_seconds = 86400
 min_fill_deadline_seconds = 300
 validate_signatures = false  # Disable for local testing
 
-# Settlement plugins (empty for now)
-[plugins.settlement]
+# Settlement plugins
+[plugins.settlement.direct_settlement]
+enabled = true
+plugin_type = "direct_settlement"
+
+[plugins.settlement.direct_settlement.config]
+oracle_address = "$ORACLE_ADDRESS"
+min_confirmations = 1
+gas_multiplier = 1.2
+max_gas_price = 100000000000  # 100 gwei
+settlement_timeout = 300  # 5 minutes
+
+[plugins.settlement.direct_settlement.config.settler_contracts]
+$CHAIN_ID = "$SETTLER_ADDRESS"
 
 # Delivery configuration
 [delivery]

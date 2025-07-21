@@ -1,212 +1,264 @@
-# solver-delivery
+# Solver Delivery - Transaction Submission Service
 
-## Overview
+The `solver-delivery` crate is responsible for orchestrating transaction submission across multiple blockchain networks through a plugin-based architecture. It manages both order filling and settlement transactions with configurable delivery strategies.
 
-The `solver-delivery` module is responsible for submitting transactions through various delivery mechanisms. It provides a pluggable architecture that supports multiple delivery methods (RPC, relayers, bundlers) with different strategies (fastest, cheapest, redundant).
+## 🏗️ Architecture Overview
 
-## Architecture
+```text
+┌─────────────────────────────────────────────────────────────────────────┐
+│                         DELIVERY SERVICE                                 │
+│  ┌───────────────────────────────────────────────────────────────────┐  │
+│  │                     Core Components                                │  │
+│  │  ┌─────────────┐  ┌──────────────┐  ┌────────────────────────┐  │  │
+│  │  │  Plugin     │  │   Delivery   │  │      Delivery          │  │  │
+│  │  │  Registry   │  │   Tracker    │  │      Strategy          │  │  │
+│  │  └─────────────┘  └──────────────┘  └────────────────────────┘  │  │
+│  └───────────────────────────────────────────────────────────────────┘  │
+│                                                                          │
+│  ┌───────────────────────────────────────────────────────────────────┐  │
+│  │                    Plugin Collections                              │  │
+│  │  ┌─────────────────────┐      ┌─────────────────────────────┐   │  │
+│  │  │  Delivery Plugins    │      │    Order Processors         │   │  │
+│  │  │  ┌───────────────┐  │      │  ┌───────────────────────┐  │   │  │
+│  │  │  │ RPC Plugin    │  │      │  │ EIP-7683 Processor    │  │   │  │
+│  │  │  ├───────────────┤  │      │  ├───────────────────────┤  │   │  │
+│  │  │  │ Relayer Plugin│  │      │  │ Custom Processor      │  │   │  │
+│  │  │  ├───────────────┤  │      │  └───────────────────────┘  │   │  │
+│  │  │  │ Bundler Plugin│  │      └─────────────────────────────┘   │  │
+│  │  │  └───────────────┘  │                                         │  │
+│  │  └─────────────────────┘                                         │  │
+│  └───────────────────────────────────────────────────────────────────┘  │
+└─────────────────────────────────────────────────────────────────────────┘
+                                    │
+                            ┌───────┴────────┐
+                            │                │
+                    ┌───────▼────┐   ┌───────▼────────┐
+                    │   Order     │   │     Fill       │
+                    │   Events    │   │    Events      │
+                    └────────────┘   └────────────────┘
+```
 
-### Core Components
+## 📁 Module Structure
 
-1. **DeliveryManager** - Orchestrates transaction submission across multiple delivery methods
-2. **DeliveryMethod Enum** - Type-safe wrapper around delivery plugins
-3. **DeliveryRequest** - Standardized request format for all delivery methods
-4. **DeliveryStrategy** - Configurable strategies for method selection
+```
+solver-delivery/
+├── src/
+│   └── lib.rs          # Service implementation and plugin orchestration
+├── Cargo.toml          # Dependencies
+└── README.md           # This file
+```
 
-### Design Principles
+## 🔑 Key Components
 
-- **Plugin-Owned Providers**: Each delivery plugin manages its own chain connections
-- **Type Safety**: Enum-based approach reduces runtime overhead
-- **Strategy Pattern**: Flexible delivery strategies without code changes
-- **Isolation**: Plugin failures don't affect other plugins
+### 1. **DeliveryService** (`lib.rs`)
+The main service that orchestrates transaction delivery through plugins.
 
-## Structure
+**Key Responsibilities:**
+- Plugin registration and lifecycle management
+- Transaction routing to appropriate plugins
+- Order event processing into transaction requests
+- Delivery tracking and status monitoring
+- Strategy-based plugin selection
 
+**Internal Structure:**
 ```rust
-// Delivery method enumeration for type safety and performance
-#[derive(Clone)]
-pub enum DeliveryMethod {
-    Rpc(RpcDeliveryPlugin),
-    Relayer(RelayerDeliveryPlugin),
-    Bundler(BundlerDeliveryPlugin),
-    Custom(String, Arc<dyn DeliveryMethodPlugin>),
-}
-
-// Standardized delivery request
-pub struct DeliveryRequest {
-    pub transaction: Transaction,
-    pub chain_id: ChainId,
-    pub priority: DeliveryPriority,
-    pub metadata: HashMap<String, Value>,
-}
-
-// Priority levels for transaction delivery
-pub enum DeliveryPriority {
-    Normal,
-    Fast,
-    Custom { max_fee: U256, priority_fee: U256 },
-}
-
-// Manager orchestrating delivery methods
-pub struct DeliveryManager {
-    plugins: HashMap<ChainId, Vec<DeliveryMethod>>,
-    strategy: DeliveryStrategy,
+pub struct DeliveryService {
+    // Plugin registries (thread-safe)
+    delivery_plugins: Arc<RwLock<HashMap<String, Arc<dyn DeliveryPlugin>>>>,
+    order_processors: Arc<RwLock<HashMap<String, Arc<dyn OrderProcessor>>>>,
+    
+    // Active delivery tracking
+    active_deliveries: Arc<RwLock<HashMap<String, DeliveryTracker>>>,
+    
+    // Configuration
+    config: DeliveryConfig,
 }
 ```
 
-## Abstractions
+### 2. **DeliveryTracker**
+Tracks the lifecycle of each delivery attempt:
+```rust
+pub struct DeliveryTracker {
+    pub request: DeliveryRequest,
+    pub attempts: Vec<DeliveryAttempt>,
+    pub started_at: u64,
+    pub status: DeliveryTrackingStatus,
+}
+```
 
-### DeliveryMethodPlugin Trait
+### 3. **Plugin Management**
+- **Delivery Plugins**: Handle actual transaction submission (RPC, relayers, bundlers)
+- **Order Processors**: Convert order/fill events into transaction requests
 
+## 🔄 Transaction Flow
+
+```text
+OrderEvent → OrderProcessor → TransactionRequest → DeliveryService
+                                                         │
+                                                         ▼
+                                                  Plugin Selection
+                                                         │
+                                                         ▼
+                                                  DeliveryPlugin
+                                                         │
+                                                         ▼
+                                                  DeliveryResponse
+```
+
+### Flow Steps:
+1. **Order Processing**: OrderEvent received from discovery
+2. **Transaction Creation**: OrderProcessor creates TransactionRequest
+3. **Plugin Selection**: Service selects suitable plugins based on chain
+4. **Delivery Execution**: Plugin submits transaction to blockchain
+5. **Status Tracking**: Service monitors transaction status
+6. **Settlement**: FillEvent triggers settlement transaction
+
+## 🔌 Plugin System
+
+### DeliveryPlugin Interface:
 ```rust
 #[async_trait]
-pub trait DeliveryMethodPlugin: Send + Sync {
-    /// Get the chain ID this plugin operates on
+pub trait DeliveryPlugin: BasePlugin {
     fn chain_id(&self) -> ChainId;
-
-    /// Check if this plugin can handle the delivery request
-    fn can_deliver(&self, request: &DeliveryRequest) -> bool;
-
-    /// Estimate delivery cost and time
-    async fn estimate(&self, request: &DeliveryRequest) -> Result<DeliveryEstimate>;
-
-    /// Execute delivery
-    async fn deliver(&self, request: DeliveryRequest) -> Result<DeliveryReceipt>;
+    async fn can_deliver(&self, request: &DeliveryRequest) -> PluginResult<bool>;
+    async fn estimate(&self, request: &DeliveryRequest) -> PluginResult<DeliveryEstimate>;
+    async fn deliver(&self, request: DeliveryRequest) -> PluginResult<DeliveryResponse>;
+    async fn get_transaction_status(&self, tx_hash: &TxHash) -> PluginResult<Option<DeliveryResponse>>;
+    async fn cancel_transaction(&self, tx_hash: &TxHash) -> PluginResult<bool>;
+    async fn replace_transaction(&self, original_tx_hash: &TxHash, new_request: DeliveryRequest) -> PluginResult<DeliveryResponse>;
+    fn supported_features(&self) -> Vec<DeliveryFeature>;
+    async fn get_network_status(&self) -> PluginResult<NetworkStatus>;
 }
 ```
 
-### Delivery Strategies
-
-1. **FirstSuccess** - Try methods sequentially until one succeeds
-2. **Redundant** - Submit through all available methods
-3. **Cheapest** - Estimate costs and pick the most economical
-4. **Fastest** - Select method with lowest latency
-
-## Usage
-
-### Basic Usage
-
+### OrderProcessor Interface:
 ```rust
-// Create delivery manager with configured plugins
-let mut plugins = HashMap::new();
-plugins.insert(
-    ChainId::from(1),
-    vec![
-        DeliveryMethod::Rpc(rpc_plugin),
-        DeliveryMethod::Relayer(relayer_plugin),
-    ]
-);
-
-let manager = DeliveryManager::new(plugins, DeliveryStrategy::FirstSuccess);
-
-// Submit transaction
-let request = DeliveryRequest {
-    transaction: tx,
-    chain_id: ChainId::from(1),
-    priority: DeliveryPriority::Normal,
-    metadata: HashMap::new(),
-};
-
-let response = manager.submit(request).await?;
-```
-
-### Configuration
-
-```toml
-[delivery]
-methods = ["rpc", "flashbots"]
-strategy = "fastest"
-
-[delivery.rpc]
-chain_id = 1
-rpc_url = "https://eth-mainnet.g.alchemy.com/v2/YOUR_KEY"
-private_key = "0x..."
-max_retries = 3
-timeout_ms = 30000
-
-[delivery.flashbots]
-chain_id = 1
-relay_url = "https://relay.flashbots.net"
-signer_key = "${FLASHBOTS_SIGNER_KEY}"
-```
-
-## Pros
-
-1. **Flexibility**: Easy to add new delivery methods via plugins
-2. **Performance**: Enum-based dispatch is faster than trait objects
-3. **Resilience**: Multiple delivery methods provide fallback options
-4. **Type Safety**: Compile-time guarantees for delivery methods
-5. **Isolation**: Each plugin manages its own connections and state
-
-## Cons
-
-1. **Recompilation**: Adding new enum variants requires rebuilding
-2. **Resource Usage**: Each plugin maintains separate connections
-3. **Complexity**: Strategy selection adds cognitive overhead
-4. **Configuration**: Each plugin needs chain-specific settings
-
-## Implementation Details
-
-### Provider Management
-
-Each delivery plugin creates and manages its own provider:
-
-```rust
-impl RpcDeliveryPlugin {
-    pub async fn new(config: ChainConfig) -> Result<Self> {
-        // Plugin owns its provider with retry and timeout middleware
-        let provider = Provider::<Http>::try_from(&config.rpc_url)?
-            .with_retry(config.max_retries)
-            .with_timeout(Duration::from_millis(config.timeout_ms));
-
-        let wallet = config.private_key
-            .ok_or_else(|| Error::Config("Delivery requires private_key".into()))?
-            .parse::<LocalWallet>()?
-            .with_chain_id(config.chain_id.as_u64());
-
-        Ok(Self {
-            chain_id: config.chain_id,
-            provider: Arc::new(provider),
-            signer: wallet,
-        })
-    }
+#[async_trait]
+pub trait OrderProcessor: Send + Sync {
+    async fn process_order_event(&self, event: &OrderEvent) -> PluginResult<Option<TransactionRequest>>;
+    async fn process_fill_event(&self, event: &FillEvent) -> PluginResult<Option<TransactionRequest>>;
+    fn can_handle_source(&self, source: &str) -> bool;
 }
 ```
 
-### Error Handling
-
-The module uses a hierarchical error system:
+## 🚀 Usage Example
 
 ```rust
-#[derive(Error, Debug)]
-pub enum DeliveryError {
-    #[error("No delivery method available for chain {0}")]
-    NoMethodForChain(ChainId),
-    
-    #[error("All delivery methods failed")]
-    AllMethodsFailed(Vec<String>),
-    
-    #[error("Transaction rejected: {0}")]
-    TransactionRejected(String),
-    
-    #[error("Estimation failed: {0}")]
-    EstimationFailed(String),
+use solver_delivery::{DeliveryService, DeliveryServiceBuilder};
+use solver_types::configs::DeliveryConfig;
+use solver_types::plugins::DeliveryStrategy;
+
+// Build service with plugins
+let service = DeliveryServiceBuilder::new()
+    .with_config(DeliveryConfig {
+        strategy: DeliveryStrategy::RoundRobin,
+        fallback_enabled: true,
+        max_parallel_attempts: 3,
+    })
+    .with_plugin("rpc".to_string(), Box::new(rpc_plugin), rpc_config)
+    .with_plugin("flashbots".to_string(), Box::new(flashbots_plugin), flashbots_config)
+    .with_order_processor("eip7683".to_string(), Arc::new(eip7683_processor))
+    .build()
+    .await;
+
+// Process an order event
+let order_event = OrderEvent { /* ... */ };
+if let Some(tx_request) = service.process_order_to_transaction(&order_event).await? {
+    // Execute the transaction
+    let response = service.execute_transaction(tx_request).await?;
+    println!("Transaction submitted: {:?}", response.tx_hash);
 }
+
+// Check transaction status
+let status = service.get_transaction_status(&tx_hash, chain_id).await?;
+
+// Health check all plugins
+let health_status = service.health_check().await?;
 ```
 
-### Metrics
+## 🔍 Critical Observations
 
-The module exposes metrics for monitoring:
+### Strengths:
+1. **Plugin Isolation**: Each plugin manages its own connections and state
+2. **Type Safety**: Strong typing for requests, responses, and priorities
+3. **Tracking**: Comprehensive delivery tracking with attempt history
+4. **Flexibility**: Easy to add new delivery methods via plugins
+5. **Separation of Concerns**: Order processing separated from delivery
 
-- `delivery_requests_total` - Total delivery requests by method
-- `delivery_success_rate` - Success rate per method
-- `delivery_latency_seconds` - Time to submit transactions
-- `delivery_cost_wei` - Gas costs by method
+### Areas of Concern:
+1. **Single Strategy**: Only RoundRobin strategy is implemented (others mentioned in docs but missing)
+2. **Error Recovery**: Limited retry logic within the service itself
+3. **Plugin Discovery**: No automatic plugin discovery based on chain
+4. **Metrics**: No built-in metrics collection despite README claims
+5. **Parallel Attempts**: Config supports parallel attempts but not implemented
 
-## Future Enhancements
+### Potential Optimizations:
+1. **Strategy Implementation**: Add Fastest, Cheapest, and Redundant strategies
+2. **Connection Pooling**: Share connections between plugins for same chain
+3. **Circuit Breaker**: Add circuit breaker for failing plugins
+4. **Batch Processing**: Support batching multiple transactions
+5. **Priority Queue**: Implement priority-based transaction queuing
 
-1. **Dynamic Plugin Loading**: Load delivery plugins at runtime
-2. **Advanced Strategies**: ML-based method selection
-3. **Circuit Breakers**: Automatic failover for unreliable methods
-4. **Gas Oracle Integration**: Better cost estimation
-5. **MEV Protection**: Enhanced privacy features
+## 🔗 Dependencies
+
+### Internal Crates:
+- `solver-types`: Core type definitions and plugin traits
+
+### External Dependencies:
+- `tokio`: Async runtime
+- `async-trait`: Async trait support
+- `futures`: Async utilities
+- `tracing`: Structured logging
+- `uuid`: Unique identifier generation
+- `bytes`: Byte manipulation
+- `thiserror`/`anyhow`: Error handling
+
+## 🏃 Runtime Behavior
+
+### Service Lifecycle:
+1. **Initialization**: Plugins are initialized during builder.build()
+2. **Registration**: Successfully initialized plugins are registered
+3. **Order Processing**: Orders converted to transactions via processors
+4. **Delivery**: Transactions routed to appropriate plugins
+5. **Monitoring**: Active deliveries tracked in memory
+
+### Transaction Processing:
+1. **Request Conversion**: TransactionRequest → DeliveryRequest
+2. **Plugin Selection**: Find plugins that can handle the chain
+3. **Strategy Execution**: Apply configured strategy (currently only RoundRobin)
+4. **Attempt Recording**: Track each delivery attempt
+5. **Status Updates**: Update tracking status on completion/failure
+
+## 🐛 Known Issues & Cruft
+
+1. **Incomplete Strategies**: Only RoundRobin is implemented despite multiple strategies in types
+2. **Unused Config**: `max_parallel_attempts` and `fallback_enabled` are stored but never used
+3. **Memory Leak Risk**: `active_deliveries` grows unbounded - no cleanup mechanism
+4. **Missing Features**: No implementation for replace_transaction despite trait requirement
+5. **Timestamp Generation**: Repeated timestamp code could be extracted
+6. **Error Context**: Many errors lose context during propagation
+
+## 🔮 Future Improvements
+
+1. **Complete Strategy Implementation**: Implement all delivery strategies
+2. **Delivery Cleanup**: Add TTL-based cleanup for old deliveries
+3. **Plugin Hot-Reload**: Support adding/removing plugins at runtime
+4. **Transaction Batching**: Batch multiple transactions for efficiency
+5. **Enhanced Monitoring**: Add Prometheus metrics
+6. **WebSocket Support**: Real-time transaction status updates
+7. **Gas Oracle Integration**: Better gas price estimation
+
+## 📊 Performance Considerations
+
+- **Lock Contention**: Multiple RwLocks could cause contention under load
+- **Plugin Iteration**: Linear search through plugins for each request
+- **Memory Usage**: Unbounded delivery tracking map
+- **No Caching**: Network status and estimates not cached
+
+## ⚠️ Security Considerations
+
+- **Plugin Trust**: All plugins have full access to transaction data
+- **Key Management**: No built-in key management - relies on plugins
+- **Transaction Privacy**: No MEV protection built into service layer
+
+The `solver-delivery` service provides a flexible foundation for multi-chain transaction submission with room for enhancement in strategy implementation and operational features.

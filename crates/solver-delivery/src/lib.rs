@@ -1,11 +1,12 @@
 // solver-delivery/src/lib.rs
 
 use solver_types::configs::DeliveryConfig;
-use solver_types::events::OrderEvent;
+use solver_types::events::{FillEvent, OrderEvent};
 use solver_types::plugins::{
-	ChainId, DeliveryPlugin, DeliveryRequest, DeliveryResponse, DeliveryStrategy, OrderProcessor,
-	PluginError, PluginResult, TxHash,
+	delivery::TransactionRequest, settlement::FillData, ChainId, DeliveryPlugin, DeliveryRequest,
+	DeliveryResponse, DeliveryStrategy, OrderProcessor, PluginError, PluginResult, TxHash,
 };
+use solver_types::{DeliveryMetadata, DeliveryPriority, TransactionPriority};
 use std::collections::HashMap;
 use std::sync::Arc;
 use tokio::sync::RwLock;
@@ -85,6 +86,46 @@ impl DeliveryService {
 	pub fn with_max_parallel_attempts(mut self, max: usize) -> Self {
 		self.config.max_parallel_attempts = max;
 		self
+	}
+
+	/// Main transaction execution function - handles both fills and settlements
+	pub async fn execute_transaction(
+		&self,
+		request: TransactionRequest,
+	) -> PluginResult<DeliveryResponse> {
+		// Convert TransactionRequest to DeliveryRequest for now
+		// In future, we'll update plugins to work directly with TransactionRequest
+		let delivery_request = self.convert_to_delivery_request(request);
+		self.deliver(delivery_request).await
+	}
+
+	/// Convert TransactionRequest to DeliveryRequest
+	fn convert_to_delivery_request(&self, request: TransactionRequest) -> DeliveryRequest {
+		DeliveryRequest {
+			transaction: request.transaction,
+			priority: match request.priority {
+				TransactionPriority::Low => DeliveryPriority::Low,
+				TransactionPriority::Normal => DeliveryPriority::Normal,
+				TransactionPriority::High => DeliveryPriority::High,
+				TransactionPriority::Urgent => DeliveryPriority::Urgent,
+				TransactionPriority::Custom {
+					max_fee,
+					priority_fee,
+					deadline,
+				} => DeliveryPriority::Custom {
+					max_fee,
+					priority_fee,
+					deadline,
+				},
+			},
+			metadata: DeliveryMetadata {
+				order_id: request.metadata.order_id,
+				user: request.metadata.user,
+				tags: request.metadata.tags,
+				custom_fields: request.metadata.custom_fields,
+			},
+			retry_config: request.retry_config,
+		}
 	}
 
 	/// Main delivery function - orchestrates plugin selection and execution
@@ -303,8 +344,11 @@ impl DeliveryService {
 		Ok(health_status)
 	}
 
-	/// Process an order event by finding the appropriate order processor
-	pub async fn process_order(&self, event: &OrderEvent) -> PluginResult<Option<DeliveryRequest>> {
+	/// Process an order event and return a transaction request
+	pub async fn process_order_to_transaction(
+		&self,
+		event: &OrderEvent,
+	) -> PluginResult<Option<TransactionRequest>> {
 		let processors = self.order_processors.read().await;
 
 		// Find a processor that can handle this order source
@@ -312,6 +356,28 @@ impl DeliveryService {
 			if processor.can_handle_source(&event.source) {
 				info!("Using order processor {} for source {}", name, event.source);
 				return processor.process_order_event(event).await;
+			}
+		}
+
+		warn!("No order processor found for source: {}", event.source);
+		Ok(None)
+	}
+
+	/// Process a fill event and return a settlement transaction request
+	pub async fn process_fill_to_transaction(
+		&self,
+		event: &FillEvent,
+	) -> PluginResult<Option<TransactionRequest>> {
+		let processors = self.order_processors.read().await;
+
+		// Find a processor that can handle this order source
+		for (name, processor) in processors.iter() {
+			if processor.can_handle_source(&event.source) {
+				info!(
+					"Using order processor {} for settlement of source {}",
+					name, event.source
+				);
+				return processor.process_fill_event(event).await;
 			}
 		}
 

@@ -1,7 +1,9 @@
 // solver-types/src/plugins/order.rs
 
-use crate::{DeliveryRequest, OrderEvent, PluginConfig};
+use crate::{DeliveryRequest, Event, FillEvent, OrderEvent, PluginConfig};
 
+use super::delivery::TransactionRequest;
+use super::settlement::{FillData, SettlementRequest};
 use super::{Address, BasePlugin, ChainId, PluginResult, Timestamp};
 use async_trait::async_trait;
 use bytes::Bytes;
@@ -92,6 +94,14 @@ pub trait OrderPlugin: BasePlugin {
 	/// Create a delivery request for filling this order
 	/// Returns the transaction data needed to fill the order on the destination chain
 	async fn create_fill_request(&self, order: &Self::Order) -> PluginResult<DeliveryRequest>;
+
+	/// Create a settlement request for claiming funds after fill
+	/// Returns None if this order type doesn't support settlement
+	async fn create_settlement_request(
+		&self,
+		order: &Self::Order,
+		fill_timestamp: Timestamp,
+	) -> PluginResult<Option<SettlementRequest>>;
 }
 
 /// Order validation result
@@ -207,7 +217,7 @@ impl OrderPluginRegistry {
 		plugin_type: &str,
 		config: super::PluginConfig,
 	) -> PluginResult<Box<dyn std::any::Any>> {
-		let factory = self
+		let _factory = self
 			.factories
 			.get(plugin_type)
 			.ok_or_else(|| super::PluginError::NotFound(plugin_type.to_string()))?;
@@ -221,15 +231,22 @@ impl OrderPluginRegistry {
 	}
 }
 
-/// Trait for processing OrderEvents and creating DeliveryRequests
+/// Trait for processing OrderEvents and creating TransactionRequests
 /// This bridges the gap between order plugins (which are generic) and delivery service
 #[async_trait]
 pub trait OrderProcessor: Send + Sync {
-	/// Process an OrderEvent and return a DeliveryRequest if applicable
+	/// Process an OrderEvent and return a TransactionRequest for filling the order
 	async fn process_order_event(
 		&self,
 		event: &OrderEvent,
-	) -> PluginResult<Option<DeliveryRequest>>;
+	) -> PluginResult<Option<TransactionRequest>>;
+
+	/// Create a settlement transaction for a filled order
+	/// This is called when the order has been filled and needs to be settled
+	async fn process_fill_event(
+		&self,
+		event: &FillEvent,
+	) -> PluginResult<Option<TransactionRequest>>;
 
 	/// Check if this processor can handle the given order source
 	fn can_handle_source(&self, source: &str) -> bool;

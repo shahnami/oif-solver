@@ -2,6 +2,7 @@
 
 use super::{ConfigValue, PluginConfig, PluginResult};
 use async_trait::async_trait;
+use serde::{Deserialize, Serialize};
 use std::any::Any;
 use std::collections::HashMap;
 use std::fmt::Debug;
@@ -199,5 +200,24 @@ impl PluginConfigSchema {
 			default_value: default,
 		});
 		self
+	}
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct RetryConfig {
+	pub max_attempts: u32,
+	pub initial_delay_ms: u64,
+	pub max_delay_ms: u64,
+	pub backoff_multiplier: f64,
+}
+
+impl Default for RetryConfig {
+	fn default() -> Self {
+		Self {
+			max_attempts: 3,
+			initial_delay_ms: 1000,
+			max_delay_ms: 30000,
+			backoff_multiplier: 2.0,
+		}
 	}
 }

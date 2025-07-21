@@ -215,15 +215,8 @@ impl SettlementPlugin for ArbitrumBroadcasterPlugin {
 
 		let metadata = solver_types::plugins::settlement::SettlementMetadata {
 			order_id: fill.order_id.clone(),
-			fill_hash: fill.fill_tx_hash.clone(),
 			strategy: "arbitrum_broadcaster".to_string(),
 			expected_confirmations: 1, // L1 confirmation
-			timeout: Some(
-				std::time::SystemTime::now()
-					.duration_since(std::time::UNIX_EPOCH)
-					.unwrap()
-					.as_secs() + self.config.challenge_period,
-			),
 			custom_fields: {
 				let mut fields = HashMap::new();
 				fields.insert(

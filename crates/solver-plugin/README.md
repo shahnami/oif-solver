@@ -1,416 +1,325 @@
-# solver-plugin
+# Solver Plugin - Extensible Plugin System
 
-## Overview
+The `solver-plugin` crate provides concrete implementations of all plugin interfaces defined in `solver-types`. It includes a centralized factory system for plugin creation and management, along with built-in implementations for state storage, order discovery, transaction delivery, and settlement strategies.
 
-The `solver-plugin` crate consolidates all plugin implementations in a single, well-organized package. It provides implementations for order types, discovery sources, delivery methods, settlement strategies, and state backends, making it easy to extend the solver's functionality through Cargo features.
+## 🏗️ Architecture Overview
 
-## Architecture
+```text
+┌─────────────────────────────────────────────────────────────────────────┐
+│                         PLUGIN FACTORY                                   │
+│  ┌───────────────────────────────────────────────────────────────────┐  │
+│  │                    Factory Registry                                │  │
+│  │  ┌─────────────┐  ┌──────────────┐  ┌────────────────────────┐  │  │
+│  │  │   State     │  │  Discovery   │  │     Delivery           │  │  │
+│  │  │ Factories   │  │  Factories   │  │    Factories           │  │  │
+│  │  └─────────────┘  └──────────────┘  └────────────────────────┘  │  │
+│  │  ┌─────────────┐  ┌──────────────┐                               │  │
+│  │  │ Settlement  │  │    Order     │                               │  │
+│  │  │ Factories   │  │  Processors  │                               │  │
+│  │  └─────────────┘  └──────────────┘                               │  │
+│  └───────────────────────────────────────────────────────────────────┘  │
+└─────────────────────────────────────────────────────────────────────────┘
+                                    │
+        ┌───────────────────────────┼───────────────────────────┐
+        │                           │                           │
+┌───────▼────────┐       ┌──────────▼────────┐       ┌─────────▼────────┐
+│ State Plugins  │       │ Discovery Plugins │       │ Delivery Plugins │
+├────────────────┤       ├───────────────────┤       ├──────────────────┤
+│ • Memory       │       │ • EIP-7683        │       │ • EVM/Ethers     │
+│ • File         │       │   Onchain         │       │                  │
+└────────────────┘       └───────────────────┘       └──────────────────┘
+                                    │
+                ┌───────────────────┴───────────────────┐
+                │                                       │
+     ┌──────────▼────────┐                  ┌──────────▼────────┐
+     │ Settlement Plugins│                  │ Order Processors  │
+     ├───────────────────┤                  ├───────────────────┤
+     │ • Direct          │                  │ • EIP-7683        │
+     │ • Arbitrum        │                  │                   │
+     └───────────────────┘                  └───────────────────┘
+```
 
-### Organization
+## 📁 Module Structure
 
 ```
 solver-plugin/
 ├── src/
-│   ├── lib.rs           # Plugin exports and registration
-│   ├── orders/          # Order type plugins
+│   ├── lib.rs              # Module exports
+│   ├── factory.rs          # Plugin factory system
+│   ├── state/              # State storage plugins
 │   │   ├── mod.rs
-│   │   ├── eip7683.rs
-│   │   ├── uniswapx.rs
-│   │   └── cowswap.rs
-│   ├── discovery/       # Discovery source plugins
+│   │   ├── memory.rs       # In-memory state storage
+│   │   └── file.rs         # File-based state storage
+│   ├── discovery/          # Order discovery plugins
 │   │   ├── mod.rs
-│   │   ├── chain.rs
-│   │   ├── webhook.rs
-│   │   └── mempool.rs
-│   ├── delivery/        # Delivery method plugins
+│   │   ├── onchain/        # On-chain discovery
+│   │   │   └── eip7683.rs  # EIP-7683 event monitoring
+│   │   └── offchain/       # Off-chain discovery (placeholder)
+│   ├── delivery/           # Transaction delivery plugins
 │   │   ├── mod.rs
-│   │   ├── rpc.rs
-│   │   ├── relayer.rs
-│   │   └── bundler.rs
-│   ├── settlement/      # Settlement strategy plugins
+│   │   └── evm/            # EVM-based delivery
+│   │       └── ethers.rs   # Ethers.rs implementation
+│   ├── settlement/         # Settlement strategy plugins
 │   │   ├── mod.rs
-│   │   ├── direct.rs
-│   │   ├── arbitrum.rs
-│   │   └── optimistic.rs
-│   └── state/           # State backend plugins
+│   │   ├── direct.rs       # Direct settlement
+│   │   └── arbitrum.rs     # Arbitrum-specific settlement
+│   └── order/              # Order processing plugins
 │       ├── mod.rs
-│       ├── redis.rs
-│       ├── dynamodb.rs
-│       └── postgres.rs
+│       ├── processor.rs    # Generic order processor
+│       └── eip7683.rs      # EIP-7683 order plugin
+├── Cargo.toml
+└── README.md
 ```
 
-### Design Principles
+## 🔑 Key Components
 
-- **Single Dependency**: Applications only need `solver-plugin`
-- **Feature Flags**: Enable only needed plugins
-- **Shared Utilities**: Common code reused across plugins
-- **Consistent Versioning**: All plugins version together
-- **Type Safety**: Compile-time plugin verification
+### 1. **Plugin Factory** (`factory.rs`)
 
-## Plugin Categories
+The central registry for all plugin types with a global singleton pattern.
 
-### 1. Order Type Plugins
+**Key Features:**
 
-Implement different order standards:
+- Type-safe plugin creation
+- Configuration validation
+- Feature discovery
+- Chain support queries
+- Global factory singleton
+
+**Factory Structure:**
 
 ```rust
-pub struct Eip7683OrderPlugin {
-    config: Eip7683Config,
-}
-
-impl OrderTypePlugin for Eip7683OrderPlugin {
-    fn name(&self) -> &'static str {
-        "eip7683"
-    }
-
-    fn parse_order(&self, data: &[u8]) -> Result<Box<dyn Order>> {
-        let order = Eip7683Order::decode(data)?;
-        Ok(Box::new(order))
-    }
-
-    fn validate_order(&self, data: &[u8]) -> Result<()> {
-        let order = Eip7683Order::decode(data)?;
-        
-        // Standard-specific validation
-        if order.expires_at() < Timestamp::now() {
-            return Err(Error::OrderExpired);
-        }
-        
-        order.validate_signature()?;
-        Ok(())
-    }
+pub struct PluginFactory {
+    state_factories: HashMap<String, Box<dyn StatePluginFactory>>,
+    discovery_factories: HashMap<String, Box<dyn DiscoveryPluginFactory>>,
+    delivery_factories: HashMap<String, Box<dyn DeliveryPluginFactory>>,
+    settlement_factories: HashMap<String, Box<dyn SettlementPluginFactory>>,
+    order_processor_factories: HashMap<String, Box<dyn OrderProcessorFactory>>,
 }
 ```
 
-### 2. Discovery Source Plugins
+### 2. **State Plugins** (`state/`)
 
-Monitor different event sources:
+#### Memory Plugin
+
+- In-memory key-value storage with TTL support
+- Atomic operations
+- Configurable max entries and default TTL
+- Thread-safe with DashMap
+
+#### File Plugin
+
+- Persistent file-based storage
+- MD5-based file naming for key distribution
+- Directory size tracking
+- Atomic write operations with sync-on-write option
+
+### 3. **Discovery Plugins** (`discovery/`)
+
+#### EIP-7683 Onchain Discovery
+
+- Monitors blockchain for EIP-7683 events (Open, Finalised, OrderPurchased)
+- Configurable polling intervals
+- Historical sync support
+- Multi-contract monitoring
+- Event deduplication
+
+### 4. **Delivery Plugins** (`delivery/`)
+
+#### EVM Ethers Delivery
+
+- Full EVM transaction management
+- EIP-1559 support
+- Nonce management
+- Gas price optimization
+- Transaction status monitoring
+- Mempool tracking (optional)
+
+### 5. **Settlement Plugins** (`settlement/`)
+
+#### Direct Settlement
+
+- Simple settlement strategy
+- Profitability validation
+- Fill data verification
+- Transaction preparation
+
+#### Arbitrum Broadcaster
+
+- Arbitrum-specific settlement broadcasting
+- Cross-chain message handling
+- Custom gas optimization
+
+### 6. **Order Processors** (`order/`)
+
+#### EIP-7683 Order Processor
+
+- Parses EIP-7683 order events
+- Creates transaction requests for fills
+- Handles settlement transaction creation
+- Validates order data
+
+## 🔌 Plugin Interfaces
+
+Each plugin implements the base plugin trait plus its specific interface:
 
 ```rust
-pub struct ChainDiscoveryPlugin {
-    chain_id: ChainId,
-    provider: Arc<Provider<Http>>,
-    contracts: Vec<Address>,
-    poll_interval: Duration,
+// Base plugin trait (all plugins)
+pub trait BasePlugin: Send + Sync {
+    async fn initialize(&mut self, config: PluginConfig) -> PluginResult<()>;
+    async fn shutdown(&mut self) -> PluginResult<()>;
+    async fn health_check(&self) -> PluginResult<PluginHealth>;
+    fn plugin_type(&self) -> &'static str;
+    fn version(&self) -> &'static str;
 }
 
-#[async_trait]
-impl DiscoverySourcePlugin for ChainDiscoveryPlugin {
-    async fn start_monitoring(&self, sink: EventSink) -> Result<()> {
-        // Monitor blockchain for events
-    }
-}
+// Specific plugin traits
+pub trait StatePlugin: BasePlugin { ... }
+pub trait DiscoveryPlugin: BasePlugin { ... }
+pub trait DeliveryPlugin: BasePlugin { ... }
+pub trait SettlementPlugin: BasePlugin { ... }
+pub trait OrderPlugin: BasePlugin { ... }
 ```
 
-### 3. Delivery Method Plugins
-
-Submit transactions through various mechanisms:
+## 🚀 Usage Example
 
 ```rust
-pub struct RpcDeliveryPlugin {
-    chain_id: ChainId,
-    provider: Arc<Provider<Http>>,
-    signer: LocalWallet,
-}
+use solver_plugin::factory::{global_plugin_factory, PluginFactory};
+use solver_types::PluginConfig;
 
-#[async_trait]
-impl DeliveryMethodPlugin for RpcDeliveryPlugin {
-    fn chain_id(&self) -> ChainId {
-        self.chain_id
-    }
+// Get the global factory (includes all built-in plugins)
+let factory = global_plugin_factory();
 
-    async fn deliver(&self, request: DeliveryRequest) -> Result<DeliveryReceipt> {
-        // Submit via RPC
-    }
-}
+// Create a state plugin
+let mut config = PluginConfig::default();
+config.set("max_entries", 10000);
+config.set("default_ttl_seconds", 3600);
+let state_plugin = factory.create_state_plugin("memory", config)?;
+
+// Create a discovery plugin
+let mut config = PluginConfig::default();
+config.set("chain_id", 1);
+config.set("rpc_url", "https://eth-mainnet.g.alchemy.com/v2/KEY");
+config.set("input_settler_addresses", vec!["0x..."]);
+let discovery_plugin = factory.create_discovery_plugin("eip7683_onchain", config)?;
+
+// Create a delivery plugin
+let mut config = PluginConfig::default();
+config.set("chain_id", 1);
+config.set("rpc_url", "https://eth-mainnet.g.alchemy.com/v2/KEY");
+config.set("private_key", "0x...");
+let delivery_plugin = factory.create_delivery_plugin("evm_ethers", config)?;
+
+// List available plugins
+let available = factory.list_available_plugins();
+println!("State plugins: {:?}", available.state_plugins);
+println!("Discovery plugins: {:?}", available.discovery_plugins);
+
+// Check plugin features
+let features = factory.get_state_plugin_features("file").unwrap();
+println!("File plugin features: {:?}", features);
 ```
 
-### 4. Settlement Strategy Plugins
+## 🔍 Critical Observations
 
-Handle order settlement and claiming:
+### Strengths:
 
-```rust
-pub struct DirectSettlementPlugin {
-    oracle_address: Address,
-    settler_addresses: HashMap<ChainId, Address>,
-}
+1. **Centralized Factory**: Single point for all plugin creation
+2. **Type Safety**: Compile-time verification of plugin types
+3. **Configuration Validation**: Plugins validate their configs
+4. **Feature Discovery**: Runtime querying of plugin capabilities
+5. **Modular Design**: Easy to add new plugin types
 
-#[async_trait]
-impl SettlementStrategyPlugin for DirectSettlementPlugin {
-    async fn prepare_settlement(&self, fill: &FillData) -> Result<SettlementTx> {
-        // Prepare settlement transaction
-    }
-}
-```
+### Areas of Concern:
 
-### 5. State Backend Plugins
+1. **Global Singleton**: The global factory pattern may complicate testing
+2. **Box Allocations**: Heavy use of trait objects impacts performance
+3. **String-based Registry**: Plugin names are strings, not enums
+4. **Limited Error Context**: Factory errors lose plugin-specific context
+5. **No Plugin Versioning**: Despite version() method, no version checking
 
-Provide different storage backends:
+### Potential Optimizations:
 
-```rust
-pub struct RedisStatePlugin {
-    connection_pool: ConnectionPool,
-}
+1. **Plugin Caching**: Reuse plugin instances where possible
+2. **Lazy Loading**: Load plugins only when needed
+3. **Configuration Schema**: Add JSON schema validation
+4. **Plugin Dependencies**: Support inter-plugin dependencies
+5. **Hot Reload**: Support updating plugins at runtime
 
-#[async_trait]
-impl StateBackendPlugin for RedisStatePlugin {
-    async fn create_store(&self, config: Value) -> Result<Box<dyn StateStore>> {
-        Ok(Box::new(RedisStateStore::new(self.connection_pool.clone())))
-    }
-}
-```
+## 🔗 Dependencies
 
-## Usage
+### Internal Crates:
 
-### Cargo Features
+- `solver-types`: Core type definitions and plugin traits
 
-```toml
-[dependencies]
-solver-plugin = { version = "0.1", features = ["eip7683", "rpc-delivery", "redis-state"] }
+### External Dependencies:
 
-# Available features:
-# Order types: "eip7683", "uniswapx", "cowswap"
-# Discovery: "chain-discovery", "webhook-discovery", "mempool-discovery"
-# Delivery: "rpc-delivery", "relayer-delivery", "bundler-delivery"
-# Settlement: "direct-settlement", "arbitrum-settlement", "optimistic-settlement"
-# State: "redis-state", "dynamodb-state", "postgres-state"
-```
+- `tokio`: Async runtime
+- `async-trait`: Async trait support
+- `ethers`: Ethereum interaction
+- `alloy`: Ethereum types
+- `serde`/`serde_json`: Serialization
+- `tracing`: Logging
+- `reqwest`: HTTP client
+- `thiserror`/`anyhow`: Error handling
+- `hex`: Hex encoding
+- `backoff`: Retry logic
+- `priority-queue`: Priority queue implementation
+- `dashmap`: Concurrent hashmap
+- `bytes`: Byte buffers
+- `rand`: Random number generation
+- `libc`: System calls
+- `md5`: Hash generation for file names
 
-### Plugin Registration
+## 🏃 Runtime Behavior
 
-```rust
-use solver_plugin::{PluginRegistry, register_defaults};
+### Plugin Lifecycle:
 
-// Create registry with all enabled plugins
-let mut registry = PluginRegistry::new();
-register_defaults(&mut registry)?;
+1. **Factory Creation**: Global factory initialized on first use
+2. **Plugin Registration**: Built-in plugins auto-registered
+3. **Configuration**: User provides plugin config
+4. **Instantiation**: Factory creates plugin instance
+5. **Initialization**: Plugin initializes with config
+6. **Operation**: Plugin performs its function
+7. **Shutdown**: Clean shutdown when done
 
-// Create specific plugin
-let order_plugin = registry.create_order_type("eip7683", config)?;
-```
+### Memory Management:
 
-### Configuration
+- Plugins are heap-allocated (Box/Arc)
+- State plugins use Arc for shared access
+- Order processors use Arc for multi-service use
+- Discovery/Delivery/Settlement use Box for single ownership
 
-```toml
-# Order type configuration
-[plugins.orders.eip7683]
-enabled = true
-validation_level = "strict"
+## 🐛 Known Issues & Cruft
 
-# Discovery configuration
-[plugins.discovery.chain]
-enabled = true
-chain_id = 1
-contracts = ["0x..."]
+1. **Unused Offchain Module**: `discovery/offchain/mod.rs` exists but empty
+2. **Duplicate Factory Structs**: Settlement plugins define unused factory structs
+3. **Inconsistent Defaults**: Some configs have defaults, others don't
+4. **Test Coverage**: Limited test coverage for most plugins
+5. **Error Propagation**: Many `unwrap()` calls in plugin implementations
+6. **Config Duplication**: Similar config fields across plugins
 
-# Delivery configuration
-[plugins.delivery.rpc]
-enabled = true
-endpoints = { 1 = "https://eth.rpc" }
-private_key = "${RPC_PRIVATE_KEY}"
+## 🔮 Future Improvements
 
-# Settlement configuration
-[plugins.settlement.direct]
-enabled = true
-oracle_address = "0x..."
-
-# State configuration
-[plugins.state.redis]
-enabled = true
-url = "redis://localhost:6379"
-```
-
-## Pros
-
-1. **Centralized Management**: All plugins in one place
-2. **Feature Control**: Fine-grained plugin selection
-3. **Code Reuse**: Shared utilities across plugins
-4. **Easy Discovery**: Clear organization structure
-5. **Version Consistency**: Unified versioning
-
-## Cons
-
-1. **Compilation Time**: Large crate with many features
-2. **Binary Size**: Unused code included without LTO
-3. **Coupling**: Changes affect all plugins
-4. **Testing**: Need to test all combinations
-
-## Implementation Details
-
-### Plugin Factory Pattern
-
-```rust
-pub type PluginFactory<T> = fn(config: Value) -> Result<Box<T>>;
-
-pub struct PluginRegistry {
-    order_types: HashMap<&'static str, PluginFactory<dyn OrderTypePlugin>>,
-    discovery_sources: HashMap<&'static str, PluginFactory<dyn DiscoverySourcePlugin>>,
-    // ... other categories
-}
-
-impl PluginRegistry {
-    pub fn register_order_type(&mut self, name: &'static str, factory: PluginFactory<dyn OrderTypePlugin>) {
-        self.order_types.insert(name, factory);
-    }
-
-    pub fn create_order_type(&self, name: &str, config: Value) -> Result<Box<dyn OrderTypePlugin>> {
-        let factory = self.order_types.get(name)
-            .ok_or_else(|| Error::PluginNotFound(name.to_string()))?;
-        factory(config)
-    }
-}
-```
-
-### Feature Flag Organization
-
-```toml
-[features]
-default = ["eip7683", "chain-discovery", "rpc-delivery", "direct-settlement"]
-
-# Order types
-eip7683 = []
-uniswapx = ["dep:uniswapx-rs"]
-cowswap = ["dep:cowswap-rs"]
-
-# Discovery sources
-chain-discovery = ["dep:ethers"]
-webhook-discovery = ["dep:axum"]
-mempool-discovery = ["dep:ethers-flashbots"]
-
-# Delivery methods
-rpc-delivery = ["dep:ethers"]
-relayer-delivery = ["dep:reqwest"]
-bundler-delivery = ["dep:ethers-flashbots"]
-
-# Settlement strategies
-direct-settlement = []
-arbitrum-settlement = ["dep:arbitrum-sdk"]
-optimistic-settlement = []
-
-# State backends
-redis-state = ["dep:redis", "dep:bb8-redis"]
-dynamodb-state = ["dep:aws-sdk-dynamodb"]
-postgres-state = ["dep:sqlx"]
-```
-
-### Shared Utilities
-
-```rust
-// Common chain configuration
-#[derive(Clone, Debug, Deserialize)]
-pub struct ChainConfig {
-    pub chain_id: ChainId,
-    pub rpc_url: String,
-    pub private_key: Option<String>,
-    pub max_retries: u32,
-    pub timeout_ms: u64,
-}
-
-// Shared provider creation
-pub async fn create_provider(config: &ChainConfig) -> Result<Provider<Http>> {
-    Provider::<Http>::try_from(&config.rpc_url)?
-        .with_retry(config.max_retries)
-        .with_timeout(Duration::from_millis(config.timeout_ms))
-}
-
-// Common error types
-#[derive(Error, Debug)]
-pub enum PluginError {
-    #[error("Configuration error: {0}")]
-    Config(String),
-    
-    #[error("Provider error: {0}")]
-    Provider(String),
-    
-    #[error("Plugin not found: {0}")]
-    NotFound(String),
-}
-```
-
-### Testing Strategy
-
-```rust
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[tokio::test]
-    async fn test_eip7683_plugin() {
-        let config = json!({
-            "validation_level": "strict"
-        });
-        
-        let plugin = Eip7683OrderPlugin::new(config).unwrap();
-        let order_data = include_bytes!("../test_data/eip7683_order.bin");
-        
-        let order = plugin.parse_order(order_data).unwrap();
-        assert_eq!(plugin.name(), "eip7683");
-    }
-
-    #[cfg(all(feature = "eip7683", feature = "chain-discovery"))]
-    #[tokio::test]
-    async fn test_plugin_integration() {
-        // Test plugin combinations
-    }
-}
-```
-
-## Extending Plugins
-
-### Adding a New Order Type
-
-1. Create `src/orders/myorder.rs`:
-
-```rust
-pub struct MyOrderPlugin {
-    config: MyOrderConfig,
-}
-
-impl OrderTypePlugin for MyOrderPlugin {
-    fn name(&self) -> &'static str {
-        "myorder"
-    }
-    // ... implement trait
-}
-```
-
-2. Add to `src/orders/mod.rs`:
-
-```rust
-#[cfg(feature = "myorder")]
-pub mod myorder;
-```
-
-3. Register in `src/lib.rs`:
-
-```rust
-#[cfg(feature = "myorder")]
-registry.register_order_type("myorder", |config| {
-    Ok(Box::new(myorder::MyOrderPlugin::new(config)?))
-});
-```
-
-4. Add feature to `Cargo.toml`:
-
-```toml
-[features]
-myorder = ["dep:myorder-sdk"]
-```
-
-## Metrics
-
-Each plugin category exposes specific metrics:
-
-- Order types: `plugin_orders_parsed_total`, `plugin_orders_validated_total`
-- Discovery: `plugin_discovery_events_total`, `plugin_discovery_errors_total`
-- Delivery: `plugin_delivery_attempts_total`, `plugin_delivery_success_rate`
-- Settlement: `plugin_settlements_prepared_total`, `plugin_settlements_completed_total`
-- State: `plugin_state_operations_total`, `plugin_state_latency_seconds`
-
-## Future Enhancements
-
-1. **Dynamic Loading**: Runtime plugin loading via WASM/dylib
+1. **Dynamic Plugin Loading**: Load plugins from external files
 2. **Plugin Marketplace**: Registry of community plugins
-3. **Hot Reload**: Update plugins without restart
+3. **Configuration Schema**: Formal schema for each plugin type
 4. **Plugin Composition**: Combine multiple plugins
-5. **Cross-Plugin Communication**: Shared event bus
+5. **Metrics Integration**: Built-in Prometheus metrics
+6. **WASM Support**: Run plugins in WASM sandbox
+7. **Plugin Templates**: Generator for new plugin types
+
+## 📊 Performance Considerations
+
+- **Factory Lookups**: HashMap lookups for each plugin creation
+- **Box Allocations**: Every plugin creation allocates
+- **Config Parsing**: Runtime config validation overhead
+- **No Plugin Pooling**: Plugins created fresh each time
+
+## ⚠️ Security Considerations
+
+- **Private Key Handling**: Delivery plugins handle private keys
+- **RPC Trust**: Plugins trust RPC endpoints
+- **No Sandboxing**: Plugins run in same process
+- **Config Validation**: Limited validation of config values
+
+The `solver-plugin` crate provides a comprehensive plugin system with built-in implementations for all major solver functionality, though the global singleton pattern and extensive use of trait objects may impact testing and performance.

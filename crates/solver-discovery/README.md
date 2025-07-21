@@ -1,271 +1,323 @@
-# solver-discovery
+# Solver Discovery - Multi-Chain Order Discovery Service
 
-## Overview
+The `solver-discovery` crate provides a plugin-based order discovery service that monitors multiple blockchain sources for order events. It orchestrates various discovery plugins, handles event deduplication, and provides real-time monitoring with comprehensive statistics.
 
-The `solver-discovery` module is responsible for discovering and monitoring orders from various sources. It provides a unified interface for different discovery mechanisms (on-chain monitoring, webhooks, mempool scanning) while maintaining source isolation and backpressure handling.
+## 🏗️ Architecture Overview
 
-## Architecture
+```text
+┌─────────────────────────────────────────────────────────────────────────┐
+│                         DISCOVERY SERVICE                                │
+│  ┌───────────────────────────────────────────────────────────────────┐  │
+│  │                     Core Components                                │  │
+│  │  ┌─────────────┐  ┌──────────────┐  ┌────────────────────────┐  │  │
+│  │  │  Plugin     │  │    Event     │  │    Discovery           │  │  │
+│  │  │  Registry   │  │ Deduplicator │  │    Statistics          │  │  │
+│  │  └─────────────┘  └──────────────┘  └────────────────────────┘  │  │
+│  └───────────────────────────────────────────────────────────────────┘  │
+│                                                                          │
+│  ┌───────────────────────────────────────────────────────────────────┐  │
+│  │                    Active Sources                                  │  │
+│  │  ┌────────────────────────────────────────────────────────────┐  │  │
+│  │  │  Source Tracking (per plugin)                               │  │  │
+│  │  │  - Status: Stopped/Starting/Running/Error/Stopping          │  │  │
+│  │  │  - Statistics: events, blocks, errors, timing               │  │  │
+│  │  │  - Filtered Event Sink with deduplication                   │  │  │
+│  │  └────────────────────────────────────────────────────────────┘  │  │
+│  └───────────────────────────────────────────────────────────────────┘  │
+└─────────────────────────────────────────────────────────────────────────┘
+                                    │
+                     ┌──────────────┴─────────────┐
+                     │                            │
+            ┌────────▼─────────┐       ┌─────────▼─────────┐
+            │ Discovery Plugin │       │ Discovery Plugin  │
+            │   (Chain A)      │       │   (Chain B)       │
+            └──────────────────┘       └───────────────────┘
+                     │                            │
+            ┌────────▼─────────┐       ┌─────────▼─────────┐
+            │  Blockchain RPC  │       │  Event Webhooks   │
+            └──────────────────┘       └───────────────────┘
+```
 
-### Core Components
+## 📁 Module Structure
 
-1. **DiscoveryManager** - Orchestrates multiple discovery sources
-2. **DiscoverySource Enum** - Type-safe wrapper around discovery plugins
-3. **OrderSink** - Channel-based order collection with backpressure
-4. **DiscoveryEvent** - Standardized event format from all sources
+```
+solver-discovery/
+├── src/
+│   ├── lib.rs          # Main service implementation
+│   └── mod.rs          # Module re-exports (appears unused)
+├── Cargo.toml          # Dependencies
+└── README.md           # This file
+```
 
-### Design Principles
+## 🔑 Key Components
 
-- **Source Isolation**: Each source runs independently
-- **Backpressure Handling**: Bounded channels prevent memory exhaustion
-- **Decoupled Processing**: Discovery separate from validation/storage
-- **Event-Driven**: Asynchronous event streaming
+### 1. **DiscoveryService** (`lib.rs`)
 
-## Structure
+The main service that orchestrates discovery plugins and manages event flow.
+
+**Key Responsibilities:**
+
+- Plugin lifecycle management (registration, start, stop)
+- Event deduplication and filtering
+- Source status tracking and statistics
+- Multi-chain support coordination
+- Health monitoring
+
+**Internal Structure:**
 
 ```rust
-// Discovery source enumeration
-#[derive(Clone)]
-pub enum DiscoverySource {
-    Chain(ChainDiscoveryPlugin),
-    Webhook(WebhookDiscoveryPlugin),
-    Custom(String, Arc<dyn DiscoverySourcePlugin>),
-}
+pub struct DiscoveryService {
+    // Thread-safe plugin registry
+    plugins: Arc<RwLock<HashMap<String, Arc<Mutex<Box<dyn DiscoveryPlugin>>>>>>,
 
-// Order sink with bounded channel for backpressure
-pub struct OrderSink {
-    sender: mpsc::Sender<DiscoveryEvent>,
-}
+    // Active source tracking
+    active_sources: Arc<RwLock<HashMap<String, DiscoverySource>>>,
 
-// Standardized discovery event
-pub struct DiscoveryEvent {
-    pub id: String,
-    pub data: Bytes,
-    pub source: String,
-    pub timestamp: Timestamp,
-}
+    // Outbound event channel
+    event_sink: EventSink<Event>,
 
-// Manager orchestrating discovery sources
-pub struct DiscoveryManager {
-    sources: Vec<DiscoverySource>,
-    sink: OrderSink,
+    // Global statistics
+    discovery_stats: Arc<RwLock<DiscoveryStats>>,
+
+    // Configuration
+    config: DiscoveryConfig,
 }
 ```
 
-## Abstractions
+### 2. **DiscoverySource**
 
-### DiscoverySourcePlugin Trait
+Tracks the state and statistics of each active discovery plugin:
+
+```rust
+pub struct DiscoverySource {
+    pub plugin_name: String,
+    pub chain_id: ChainId,
+    pub source_type: String,
+    pub status: SourceStatus,
+    pub stats: SourceStats,
+}
+```
+
+### 3. **EventDeduplicator**
+
+Prevents duplicate events within a configurable time window:
+
+- Uses event key: `chain_id:event_id:tx_hash:event_type`
+- Configurable deduplication window (default: 300 seconds)
+- Automatic cleanup of old entries
+
+### 4. **Filtered Event Sink**
+
+Each plugin gets a filtered sink that:
+
+- Applies deduplication logic
+- Updates source statistics
+- Forwards valid events to main sink
+- Handles errors and updates error counts
+
+## 🔄 Event Discovery Flow
+
+```text
+Blockchain/Source → Discovery Plugin → Filtered Sink → Deduplication
+                                                            │
+                                                            ▼
+                                                    Statistics Update
+                                                            │
+                                                            ▼
+                                                      Main Event Sink
+                                                            │
+                                                            ▼
+                                                    Orchestrator/Core
+```
+
+### Flow Steps:
+
+1. **Plugin Monitoring**: Plugin monitors blockchain/source for events
+2. **Event Creation**: Plugin creates DiscoveryEvent with metadata
+3. **Filtered Sink**: Event sent through plugin's filtered sink
+4. **Deduplication**: Check if event was seen recently
+5. **Statistics Update**: Update source stats (events count, blocks, etc.)
+6. **Event Forwarding**: Send to main event sink for processing
+
+## 🔌 Plugin System
+
+### DiscoveryPlugin Interface:
 
 ```rust
 #[async_trait]
-pub trait DiscoverySourcePlugin: Send + Sync {
-    /// Start monitoring for events
-    async fn start_monitoring(&self, sink: EventSink) -> Result<()>;
-
-    /// Stop monitoring gracefully
-    async fn stop_monitoring(&self) -> Result<()>;
+pub trait DiscoveryPlugin: BasePlugin {
+    async fn start_monitoring(&mut self, sink: EventSink<Event>) -> PluginResult<()>;
+    async fn stop_monitoring(&mut self) -> PluginResult<()>;
+    async fn get_status(&self) -> PluginResult<DiscoveryStatus>;
+    async fn discover_range(&self, from_block: u64, to_block: u64, sink: EventSink<Event>) -> PluginResult<u64>;
+    fn supported_event_types(&self) -> Vec<EventType>;
+    fn chain_id(&self) -> ChainId;
+    async fn can_monitor_contract(&self, contract_address: &Address) -> PluginResult<bool>;
+    async fn subscribe_to_events(&mut self, filters: Vec<EventFilter>) -> PluginResult<()>;
+    async fn unsubscribe_from_events(&mut self, filters: Vec<EventFilter>) -> PluginResult<()>;
 }
 ```
 
-### Why OrderSink?
-
-The `OrderSink` pattern decouples discovery from state management:
-
-1. **Deduplication**: Core handles duplicate detection, not sources
-2. **Validation**: Order validation happens centrally
-3. **Batching**: Core can batch process orders efficiently
-4. **Simplicity**: Discovery sources focus only on event detection
-
-## Usage
-
-### Basic Usage
+### Configuration:
 
 ```rust
-// Create discovery manager
-let (tx, rx) = mpsc::channel(1000); // Bounded channel
-let sink = OrderSink::new(tx);
-
-let sources = vec![
-    DiscoverySource::Chain(chain_plugin),
-    DiscoverySource::Webhook(webhook_plugin),
-];
-
-let manager = DiscoveryManager::new(sources, sink);
-
-// Start monitoring
-manager.start().await?;
-
-// Process discovered orders
-while let Some(event) = rx.recv().await {
-    match process_order(event).await {
-        Ok(_) => info!("Order processed: {}", event.id),
-        Err(e) => error!("Failed to process order: {}", e),
-    }
+pub struct DiscoveryConfig {
+    pub historical_sync: bool,              // Enable historical block sync
+    pub realtime_monitoring: bool,          // Enable real-time monitoring
+    pub dedupe_events: bool,                // Enable event deduplication
+    pub max_event_age_seconds: u64,         // Max age for events (300s)
+    pub max_events_per_second: u64,         // Rate limiting (1000/s)
+    pub event_buffer_size: usize,           // Event buffer size (10000)
+    pub deduplication_window_seconds: u64,  // Dedup window (300s)
+    pub max_concurrent_sources: usize,      // Max active sources (10)
 }
 ```
 
-### Configuration
-
-```toml
-[discovery]
-sources = ["onchain", "webhook"]
-
-[discovery.onchain]
-chain_id = 1
-contracts = ["0x1234...", "0x5678..."]
-start_block = 18000000
-poll_interval = "12s"
-
-[discovery.webhook]
-port = 8081
-auth_token = "${WEBHOOK_AUTH_TOKEN}"
-path = "/orders"
-```
-
-## Pros
-
-1. **Modularity**: Easy to add new discovery sources
-2. **Resilience**: Source failures don't affect others
-3. **Scalability**: Parallel monitoring across sources
-4. **Backpressure**: Natural flow control via channels
-5. **Type Safety**: Compile-time guarantees
-
-## Cons
-
-1. **Channel Overhead**: Additional hop for order processing
-2. **Memory Usage**: Buffered orders in channels
-3. **Complexity**: Multiple moving parts to coordinate
-4. **Latency**: Buffering can add small delays
-
-## Implementation Details
-
-### Chain Discovery Plugin
+## 🚀 Usage Example
 
 ```rust
-pub struct ChainDiscoveryPlugin {
-    chain_id: ChainId,
-    provider: Arc<Provider<Http>>, // Read-only, no signer
-    contracts: Vec<Address>,
-    poll_interval: Duration,
-}
+use solver_discovery::{DiscoveryService, DiscoveryServiceBuilder};
+use solver_types::configs::DiscoveryConfig;
 
-impl ChainDiscoveryPlugin {
-    async fn monitor_blocks(&self, sink: EventSink) -> Result<()> {
-        let mut block_stream = self.provider
-            .watch_blocks()
-            .await?
-            .interval(self.poll_interval);
+// Create event channel
+let (tx, mut rx) = mpsc::unbounded_channel();
+let event_sink = EventSink::new(tx);
 
-        while let Some(block_hash) = block_stream.next().await {
-            let block = self.provider.get_block(block_hash).await?;
-            
-            // Check for relevant events
-            let logs = self.provider
-                .get_logs(&Filter::new()
-                    .address(self.contracts.clone())
-                    .from_block(block.number.unwrap())
-                    .to_block(block.number.unwrap()))
-                .await?;
+// Build service with plugins
+let service = DiscoveryServiceBuilder::new()
+    .with_config(DiscoveryConfig {
+        dedupe_events: true,
+        deduplication_window_seconds: 300,
+        max_concurrent_sources: 5,
+        ..Default::default()
+    })
+    .with_plugin("eth_mainnet".to_string(), Box::new(eth_plugin), eth_config)
+    .with_plugin("arbitrum".to_string(), Box::new(arb_plugin), arb_config)
+    .build(event_sink)
+    .await;
 
-            for log in logs {
-                let event = self.parse_log(log)?;
-                sink.send_event(event).await?;
+// Start specific source
+service.start_source("eth_mainnet").await?;
+
+// Or start all sources
+service.start_all().await?;
+
+// Process discovered events
+tokio::spawn(async move {
+    while let Some(event) = rx.recv().await {
+        match event {
+            Event::Discovery(discovery_event) => {
+                println!("New order discovered: {}", discovery_event.id);
             }
-        }
-        
-        Ok(())
-    }
-}
-```
-
-### Webhook Discovery Plugin
-
-```rust
-pub struct WebhookDiscoveryPlugin {
-    port: u16,
-    auth_token: String,
-    path: String,
-}
-
-impl WebhookDiscoveryPlugin {
-    async fn start_server(&self, sink: EventSink) -> Result<()> {
-        let app = Router::new()
-            .route(&self.path, post(handle_webhook))
-            .layer(middleware::auth(self.auth_token.clone()))
-            .with_state(sink);
-
-        Server::bind(&format!("0.0.0.0:{}", self.port).parse()?)
-            .serve(app.into_make_service())
-            .await?;
-
-        Ok(())
-    }
-}
-```
-
-### Backpressure Handling
-
-```rust
-impl OrderSink {
-    pub async fn send(&self, event: DiscoveryEvent) -> Result<()> {
-        // Channel automatically provides backpressure
-        match self.sender.try_send(event) {
-            Ok(_) => Ok(()),
-            Err(TrySendError::Full(event)) => {
-                // Channel full, wait for space
-                warn!("Discovery channel full, applying backpressure");
-                self.sender.send(event).await
-                    .map_err(|_| Error::ChannelClosed)?;
-                Ok(())
-            }
-            Err(TrySendError::Closed(_)) => {
-                Err(Error::ChannelClosed)
-            }
+            _ => {}
         }
     }
+});
+
+// Monitor status
+let status = service.get_status().await;
+for (name, source) in status {
+    println!("{}: {:?} - {} events", name, source.status, source.stats.events_discovered);
 }
+
+// Get statistics
+let stats = service.get_stats().await;
+println!("Total events: {}, Rate: {}/min", stats.total_events_discovered, stats.events_per_minute);
 ```
 
-### Error Recovery
+## 🔍 Critical Observations
 
-```rust
-impl DiscoveryManager {
-    async fn start_with_recovery(&self) -> Result<()> {
-        for source in &self.sources {
-            let sink = self.sink.clone();
-            
-            tokio::spawn(async move {
-                loop {
-                    match source.start_monitoring(sink.clone()).await {
-                        Ok(_) => info!("Discovery source stopped normally"),
-                        Err(e) => {
-                            error!("Discovery source error: {}", e);
-                            // Exponential backoff
-                            tokio::time::sleep(Duration::from_secs(60)).await;
-                            continue;
-                        }
-                    }
-                    break;
-                }
-            });
-        }
-        Ok(())
-    }
-}
-```
+### Strengths:
 
-## Metrics
+1. **Plugin Isolation**: Each plugin runs independently with its own mutex
+2. **Comprehensive Statistics**: Detailed tracking per source and globally
+3. **Event Deduplication**: Prevents processing duplicate events
+4. **Flexible Configuration**: Extensive configuration options
+5. **Multi-Chain Support**: Can monitor multiple chains simultaneously
 
-The module exposes metrics for monitoring:
+### Areas of Concern:
 
-- `discovery_events_total` - Total events by source
-- `discovery_errors_total` - Errors by source and type
-- `discovery_lag_seconds` - Time behind chain tip
-- `discovery_channel_utilization` - Channel capacity usage
+1. **Double Mutex**: Plugins wrapped in `Arc<Mutex<Box<dyn DiscoveryPlugin>>>` - redundant Arc
+2. **mod.rs Confusion**: The mod.rs file appears to be unused boilerplate
+3. **Missing Rate Limiting**: Config has `max_events_per_second` but no implementation
+4. **No Event Filtering**: All events forwarded, no source-level filtering
+5. **Memory Growth**: Deduplication cache grows until cleanup, could be optimized
 
-## Future Enhancements
+### Potential Optimizations:
 
-1. **Mempool Integration**: Monitor pending transactions
-2. **GraphQL Support**: Alternative to RPC for historical data
-3. **Event Filtering**: In-source filtering to reduce noise
-4. **Replay Support**: Reprocess historical blocks
-5. **Cross-Chain Coordination**: Unified discovery across chains
+1. **Simplify Plugin Storage**: Remove redundant Arc wrapper
+2. **Implement Rate Limiting**: Add rate limiter per source
+3. **Event Filtering**: Add configurable event filters at source level
+4. **Bloom Filter**: Use bloom filter for deduplication (memory efficient)
+5. **Metrics Export**: Add Prometheus metrics export
+
+## 🔗 Dependencies
+
+### Internal Crates:
+
+- `solver-types`: Core type definitions and plugin traits
+
+### External Dependencies:
+
+- `tokio`: Async runtime and channels
+- `async-trait`: Async trait support
+- `futures`: Async utilities
+- `tracing`: Structured logging
+- `uuid`: Unique identifier generation
+- `bytes`: Byte buffer handling
+- `thiserror`/`anyhow`: Error handling
+- `serde`/`serde_json`: Serialization support
+
+## 🏃 Runtime Behavior
+
+### Service Lifecycle:
+
+1. **Plugin Registration**: Plugins initialized and registered
+2. **Source Activation**: Start monitoring creates filtered sink
+3. **Event Discovery**: Plugins send events through filtered sink
+4. **Deduplication**: Events checked against recent history
+5. **Statistics Update**: Per-source stats updated in real-time
+6. **Event Forwarding**: Valid events sent to orchestrator
+
+### Concurrency Model:
+
+- Each plugin runs in its own async task
+- Filtered sinks spawn dedicated forwarding tasks
+- Statistics updates use RwLock for concurrent access
+- Event deduplication uses async RwLock
+
+## 🐛 Known Issues & Cruft
+
+1. **Unused mod.rs**: The mod.rs file contains incorrect re-exports and appears unused
+2. **Rate Limiting Missing**: Configuration exists but no implementation
+3. **Historical Sync**: Config flag exists but no implementation in service
+4. **Event Age Filtering**: `max_event_age_seconds` configured but not enforced
+5. **Plugin Double-Lock**: Unnecessary complexity in plugin storage type
+6. **No Graceful Shutdown**: Plugins stopped immediately without draining
+
+## 🔮 Future Improvements
+
+1. **Rate Limiting**: Implement per-source rate limiting
+2. **Event Filtering**: Add source-level event filtering
+3. **Historical Sync**: Implement historical block range discovery
+4. **Graceful Shutdown**: Allow plugins to finish processing before stop
+5. **Circuit Breaker**: Add circuit breaker for failing sources
+6. **Plugin Hot Reload**: Support adding/removing plugins at runtime
+7. **Event Replay**: Support replaying events from specific block
+
+## 📊 Performance Considerations
+
+- **Lock Contention**: Multiple RwLocks could cause contention
+- **Channel Overhead**: Each plugin has dedicated channel and task
+- **Deduplication Cost**: Hash map lookups for every event
+- **Statistics Updates**: Frequent writes to shared state
+- **No Batching**: Events processed individually, not batched
+
+## ⚠️ Security Considerations
+
+- **Plugin Trust**: Plugins have full event sink access
+- **No Authentication**: No built-in auth for webhook sources
+- **Event Validation**: No validation of event data integrity
+- **Resource Limits**: No protection against malicious plugins
+
+The `solver-discovery` service provides a robust foundation for multi-chain event discovery with good statistics and monitoring, though some configuration options lack implementation.

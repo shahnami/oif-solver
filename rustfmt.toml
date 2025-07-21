@@ -17,3 +17,16 @@ fn_params_layout = "Tall"
 # Code style preferences
 use_try_shorthand = true
 use_field_init_shorthand = true
+
+
+# Prevent rustfmt from formatting code blocks in comments/docs
+format_code_in_doc_comments = true
+
+# Keep the original formatting in doc comments
+normalize_doc_attributes = false
+
+# Prevent reformatting of generated code
+format_generated_files = false
+
+# Optional: set max width for better ASCII art preservation
+comment_width = 120

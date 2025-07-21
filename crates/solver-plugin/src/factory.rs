@@ -7,6 +7,7 @@ use std::sync::Arc;
 use crate::delivery::{EvmEthersConfig, EvmEthersDeliveryPlugin};
 use crate::discovery::{Eip7683OnchainConfig, Eip7683OnchainDiscoveryPlugin};
 use crate::order::{create_eip7683_processor, Eip7683OrderPlugin};
+use crate::settlement::DirectSettlementPlugin;
 use crate::state::{FileConfig, FileStatePlugin, InMemoryConfig, InMemoryStatePlugin};
 
 /// Global plugin factory instance
@@ -243,6 +244,10 @@ pub struct EvmEthersDeliveryPluginFactory;
 #[derive(Default)]
 pub struct Eip7683OnchainDiscoveryPluginFactory;
 
+// Settlement Factory Structs
+#[derive(Default)]
+pub struct DirectSettlementPluginFactory;
+
 // Order Processor Factory Structs
 #[derive(Default)]
 pub struct Eip7683OrderProcessorFactory;
@@ -263,11 +268,11 @@ pub fn create_builtin_plugin_factory() -> PluginFactory {
 	// Register discovery plugins
 	factory.register_discovery_factory(Eip7683OnchainDiscoveryPluginFactory);
 
+	// Register settlement plugins
+	factory.register_settlement_factory(DirectSettlementPluginFactory);
+
 	// Register order processors
 	factory.register_order_processor_factory(Eip7683OrderProcessorFactory);
-
-	// TODO: Register other plugin types when implemented
-	// factory.register_settlement_factory(DirectSettlementPluginFactory::new());
 
 	factory
 }
@@ -503,6 +508,37 @@ impl DiscoveryPluginFactory for Eip7683OnchainDiscoveryPluginFactory {
 
 	fn supports_realtime(&self) -> bool {
 		true
+	}
+}
+
+/// Factory for creating direct settlement plugins
+impl SettlementPluginFactory for DirectSettlementPluginFactory {
+	fn create_plugin(&self, config: PluginConfig) -> PluginResult<Box<dyn SettlementPlugin>> {
+		let plugin = DirectSettlementPlugin::new();
+		Ok(Box::new(plugin))
+	}
+
+	fn plugin_type(&self) -> &'static str {
+		"direct_settlement"
+	}
+
+	fn supported_chains(&self) -> Vec<ChainId> {
+		vec![
+			1,     // Ethereum Mainnet
+			10,    // Optimism
+			56,    // BSC
+			137,   // Polygon
+			250,   // Fantom
+			8453,  // Base
+			31337, // Hardhat
+			31338, // Hardhat 2
+			42161, // Arbitrum One
+			43114, // Avalanche
+		]
+	}
+
+	fn supported_settlement_types(&self) -> Vec<SettlementType> {
+		vec![SettlementType::Direct]
 	}
 }
 

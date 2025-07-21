@@ -8,7 +8,7 @@ use std::any::Any;
 use std::collections::HashMap;
 
 /// Direct settlement plugin - settles immediately on origin chain
-#[derive(Debug)]
+#[derive(Debug, Default)]
 pub struct DirectSettlementPlugin {
 	config: DirectSettlementConfig,
 	metrics: PluginMetrics,
@@ -239,15 +239,8 @@ impl SettlementPlugin for DirectSettlementPlugin {
 
 		let metadata = solver_types::plugins::settlement::SettlementMetadata {
 			order_id: fill.order_id.clone(),
-			fill_hash: fill.fill_tx_hash.clone(),
 			strategy: "direct".to_string(),
 			expected_confirmations: self.config.min_confirmations,
-			timeout: Some(
-				std::time::SystemTime::now()
-					.duration_since(std::time::UNIX_EPOCH)
-					.unwrap()
-					.as_secs() + self.config.settlement_timeout,
-			),
 			custom_fields: HashMap::new(),
 		};
 
