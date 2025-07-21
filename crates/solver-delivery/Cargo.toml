@@ -7,28 +7,21 @@ license.workspace = true
 repository.workspace = true
 
 [dependencies]
+# Internal dependencies
 solver-types = { path = "../solver-types" }
-solver-chains = { path = "../solver-chains" }
 
-# Async
-tokio = { workspace = true }
-async-trait = { workspace = true }
+# Async runtime
+tokio.workspace = true
+async-trait.workspace = true
+futures.workspace = true
 
-# HTTP client
-reqwest = { workspace = true, features = ["json"] }
+# Logging
+tracing.workspace = true
 
-# Serialization
-serde = { workspace = true }
-serde_json = { workspace = true }
+# Common utilities
+uuid.workspace = true
+bytes.workspace = true
 
 # Error handling
-thiserror = { workspace = true }
-anyhow = { workspace = true }
-
-# Utilities
-tracing = { workspace = true }
-hex = { workspace = true }
-
-# Keep these for future implementations
-ethers = { workspace = true }
-alloy = { workspace = true }
+thiserror.workspace = true
+anyhow.workspace = true

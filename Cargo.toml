@@ -45,6 +45,7 @@ rust_decimal = { version = "1.35", features = ["serde"] }
 uuid = { version = "1.10", features = ["v4", "serde"] }
 backoff = { version = "0.4", features = ["tokio"] }
 priority-queue = "2.0"
+bytes = "1.8"
 
 # HTTP and web
 reqwest = { version = "0.12.22", features = ["json"] }

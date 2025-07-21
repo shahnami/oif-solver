@@ -1,0 +1,131 @@
+# Example configuration for OIF Solver Service
+
+# Main solver settings
+[solver]
+name = "example-solver"
+log_level = "info"
+http_port = 8080
+metrics_port = 9090
+
+# Plugin configuration
+[plugins]
+
+# Discovery plugins - for finding cross-chain intents
+[plugins.discovery.eip7683_mainnet]
+enabled = true
+plugin_type = "eip7683_onchain"
+
+[plugins.discovery.eip7683_mainnet.config]
+chain_id = 31337
+rpc_url = "http://localhost:8545"
+timeout_ms = 30000
+poll_interval_ms = 12000
+batch_size = 100
+# Contract addresses to monitor
+input_settler_addresses = ["0x1234567890123456789012345678901234567890"]
+output_settler_addresses = []
+# Event monitoring flags
+monitor_open = true
+monitor_finalised = true
+monitor_order_purchased = true
+# Historical sync
+enable_historical_sync = false
+historical_start_block = 0
+
+[plugins.discovery.eip7683_arbitrum]
+enabled = false
+plugin_type = "eip7683_onchain"
+
+[plugins.discovery.eip7683_arbitrum.config]
+chain_id = 31338
+rpc_url = "http://localhost:8546"
+timeout_ms = 30000
+poll_interval_ms = 2000
+batch_size = 100
+input_settler_addresses = []
+output_settler_addresses = []
+monitor_open = true
+monitor_finalised = true
+monitor_order_purchased = false
+enable_historical_sync = false
+
+# Delivery plugins - for executing transactions
+[plugins.delivery.mainnet_delivery]
+enabled = true
+plugin_type = "evm_ethers"
+
+[plugins.delivery.mainnet_delivery.config]
+chain_id = 31337
+rpc_url = "http://localhost:8545"
+private_key = "0xac0974bec39a17e36ba4a6b4d238ff944bacb478cbed5efcae784d7bf4f2ff80"
+max_retries = 3
+timeout_ms = 60000
+enable_eip1559 = true
+nonce_management = true
+max_pending_transactions = 10
+
+[plugins.delivery.arbitrum_delivery]
+enabled = false
+plugin_type = "evm_ethers"
+
+[plugins.delivery.arbitrum_delivery.config]
+chain_id = 31338
+rpc_url = "http://localhost:8546"
+private_key = "0xac0974bec39a17e36ba4a6b4d238ff944bacb478cbed5efcae784d7bf4f2ff80"
+max_retries = 3
+timeout_ms = 30000
+enable_eip1559 = true
+nonce_management = true
+max_pending_transactions = 10
+
+# State plugins - for storing order and settlement data
+[plugins.state.primary_state]
+enabled = true
+plugin_type = "memory"
+
+[plugins.state.primary_state.config]
+max_entries = 10000
+
+[plugins.state.backup_state]
+enabled = false
+plugin_type = "file"
+
+[plugins.state.backup_state.config]
+storage_path = "./data/state"
+
+# Order plugins (currently empty - implement when needed)
+[plugins.order]
+
+# Settlement plugins (currently empty - implement when needed)
+[plugins.settlement]
+
+# Delivery configuration
+[delivery]
+strategy = "RoundRobin"   # Options: "RoundRobin"
+fallback_enabled = true
+max_parallel_attempts = 3
+
+# Settlement configuration
+[settlement]
+default_strategy = "direct"
+fallback_strategies = ["arbitrum_bridge"]
+profit_threshold_wei = "1000000000000000" # 0.001 ETH
+
+# Discovery configuration
+[discovery]
+historical_sync = false
+realtime_monitoring = true
+dedupe_events = true
+max_event_age_seconds = 3600 # 1 hour
+# Additional configurable fields (with defaults if not specified)
+max_events_per_second = 1000
+event_buffer_size = 10000
+deduplication_window_seconds = 300
+max_concurrent_sources = 10
+
+# State configuration
+[state]
+default_backend = "primary_state" # Must match a plugin name in plugins.state
+enable_metrics = true
+cleanup_interval_seconds = 300    # 5 minutes
+max_concurrent_operations = 100

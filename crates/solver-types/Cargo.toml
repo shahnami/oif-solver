@@ -7,29 +7,28 @@ license.workspace = true
 repository.workspace = true
 
 [dependencies]
-# Async trait support
-async-trait = { workspace = true }
-
-# Ethereum types
-ethers-core = { workspace = true }
+# Async runtime
+async-trait.workspace = true
+tokio.workspace = true
+tokio-stream.workspace = true
+futures.workspace = true
+async-stream.workspace = true
 
 # Serialization
-serde = { workspace = true }
-serde_json = { workspace = true }
+serde.workspace = true
+serde_json.workspace = true
+
+# Ethereum types
+ethers-core.workspace = true
 
 # Error handling
-thiserror = { workspace = true }
-anyhow = { workspace = true }
+thiserror.workspace = true
+anyhow.workspace = true
 
-# Additional common types
-chrono = { workspace = true, features = ["serde"] }
-rust_decimal = { workspace = true }
-uuid = { workspace = true }
-
-# Streams
-futures = { workspace = true }
-tokio-stream = { workspace = true }
-
-# Cryptography
-sha3 = { workspace = true }
-hex = { workspace = true }
+# Common utilities
+chrono.workspace = true
+rust_decimal.workspace = true
+uuid.workspace = true
+hex.workspace = true
+sha3.workspace = true
+bytes.workspace = true

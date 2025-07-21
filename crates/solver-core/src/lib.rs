@@ -1,9 +1,15 @@
-//! Core solver engine and coordination logic.
+// solver-core/src/lib.rs
 
-pub mod coordinator;
 pub mod engine;
-// pub mod registry;
+pub mod error;
+pub mod lifecycle;
 
-pub use coordinator::SolverCoordinator;
-pub use engine::{EngineStats, SolverEngine};
-// pub use registry::ComponentRegistry;
+pub use engine::{EventSender, HealthReport, Orchestrator, OrchestratorBuilder};
+
+// Re-export event types from solver-types
+pub use error::CoreError;
+pub use lifecycle::{LifecycleManager, LifecycleState};
+pub use solver_types::{
+	Event, FillEvent, FillStatus, OrderEvent, ServiceStatus, SettlementEvent, SettlementStatus,
+	StatusEvent,
+};
