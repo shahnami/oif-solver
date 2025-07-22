@@ -209,4 +209,33 @@ impl PluginConfig {
 			_ => None,
 		}
 	}
+
+	/// Get an array of numbers from configuration.
+	///
+	/// Extracts numeric values from a configuration array, filtering out
+	/// non-numeric elements.
+	pub fn get_number_array(&self, key: &str) -> Option<Vec<i64>> {
+		match self.config.get(key)? {
+			ConfigValue::Array(arr) => Some(
+				arr.iter()
+					.filter_map(|v| {
+						if let ConfigValue::Number(n) = v {
+							Some(*n)
+						} else {
+							None
+						}
+					})
+					.collect(),
+			),
+			_ => None,
+		}
+	}
+
+	/// Get an object value from configuration.
+	pub fn get_object(&self, key: &str) -> Option<HashMap<String, ConfigValue>> {
+		self.config.get(key).and_then(|v| match v {
+			ConfigValue::Object(obj) => Some(obj.clone()),
+			_ => None,
+		})
+	}
 }

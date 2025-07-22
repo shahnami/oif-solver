@@ -1,6 +1,6 @@
 # Solver Discovery - Multi-Chain Order Discovery Service
 
-The `solver-discovery` crate provides a plugin-based order discovery service that monitors multiple blockchain sources for order events. It orchestrates various discovery plugins, handles event deduplication, and provides real-time monitoring with comprehensive statistics.
+The `solver-discovery` crate provides a plugin-based order discovery service that monitors multiple blockchain sources for order events. It orchestrates various discovery plugins and provides real-time monitoring capabilities.
 
 ## 🏗️ Architecture Overview
 
@@ -10,8 +10,8 @@ The `solver-discovery` crate provides a plugin-based order discovery service tha
 │  ┌───────────────────────────────────────────────────────────────────┐  │
 │  │                     Core Components                                │  │
 │  │  ┌─────────────┐  ┌──────────────┐  ┌────────────────────────┐  │  │
-│  │  │  Plugin     │  │    Event     │  │    Discovery           │  │  │
-│  │  │  Registry   │  │ Deduplicator │  │    Statistics          │  │  │
+│  │  │  Plugin     │  │    Active    │  │      Discovery         │  │  │
+│  │  │  Registry   │  │   Sources    │  │      Configuration     │  │  │
 │  │  └─────────────┘  └──────────────┘  └────────────────────────┘  │  │
 │  └───────────────────────────────────────────────────────────────────┘  │
 │                                                                          │
@@ -20,8 +20,8 @@ The `solver-discovery` crate provides a plugin-based order discovery service tha
 │  │  ┌────────────────────────────────────────────────────────────┐  │  │
 │  │  │  Source Tracking (per plugin)                               │  │  │
 │  │  │  - Status: Stopped/Starting/Running/Error/Stopping          │  │  │
-│  │  │  - Statistics: events, blocks, errors, timing               │  │  │
-│  │  │  - Filtered Event Sink with deduplication                   │  │  │
+│  │  │  - Plugin Name, Chain ID, Source Type                       │  │  │
+│  │  │  - Direct Event Forwarding to Main Sink                     │  │  │
 │  │  └────────────────────────────────────────────────────────────┘  │  │
 │  └───────────────────────────────────────────────────────────────────┘  │
 └─────────────────────────────────────────────────────────────────────────┘
@@ -44,7 +44,7 @@ The `solver-discovery` crate provides a plugin-based order discovery service tha
 solver-discovery/
 ├── src/
 │   ├── lib.rs          # Main service implementation
-│   └── mod.rs          # Module re-exports (appears unused)
+│   └── mod.rs          # Module exports
 ├── Cargo.toml          # Dependencies
 └── README.md           # This file
 ```
@@ -58,10 +58,9 @@ The main service that orchestrates discovery plugins and manages event flow.
 **Key Responsibilities:**
 
 - Plugin lifecycle management (registration, start, stop)
-- Event deduplication and filtering
-- Source status tracking and statistics
+- Source status tracking
 - Multi-chain support coordination
-- Health monitoring
+- Event forwarding to orchestrator
 
 **Internal Structure:**
 
@@ -76,9 +75,6 @@ pub struct DiscoveryService {
     // Outbound event channel
     event_sink: EventSink<Event>,
 
-    // Global statistics
-    discovery_stats: Arc<RwLock<DiscoveryStats>>,
-
     // Configuration
     config: DiscoveryConfig,
 }
@@ -86,7 +82,7 @@ pub struct DiscoveryService {
 
 ### 2. **DiscoverySource**
 
-Tracks the state and statistics of each active discovery plugin:
+Tracks the state of each active discovery plugin:
 
 ```rust
 pub struct DiscoverySource {
@@ -94,54 +90,44 @@ pub struct DiscoverySource {
     pub chain_id: ChainId,
     pub source_type: String,
     pub status: SourceStatus,
-    pub stats: SourceStats,
 }
 ```
 
-### 3. **EventDeduplicator**
+### 3. **Source Status**
 
-Prevents duplicate events within a configurable time window:
+Represents the operational state of a discovery source:
 
-- Uses event key: `chain_id:event_id:tx_hash:event_type`
-- Configurable deduplication window (default: 300 seconds)
-- Automatic cleanup of old entries
-
-### 4. **Filtered Event Sink**
-
-Each plugin gets a filtered sink that:
-
-- Applies deduplication logic
-- Updates source statistics
-- Forwards valid events to main sink
-- Handles errors and updates error counts
+```rust
+pub enum SourceStatus {
+    Stopped,
+    Starting,
+    Running(Instant),
+    Error(String),
+    Stopping,
+}
+```
 
 ## 🔄 Event Discovery Flow
 
 ```text
-Blockchain/Source → Discovery Plugin → Filtered Sink → Deduplication
-                                                            │
-                                                            ▼
-                                                    Statistics Update
-                                                            │
-                                                            ▼
-                                                      Main Event Sink
-                                                            │
-                                                            ▼
-                                                    Orchestrator/Core
+Blockchain/Source → Discovery Plugin → Event Creation → Main Event Sink
+                                                              │
+                                                              ▼
+                                                       Orchestrator/Core
 ```
 
 ### Flow Steps:
 
 1. **Plugin Monitoring**: Plugin monitors blockchain/source for events
 2. **Event Creation**: Plugin creates DiscoveryEvent with metadata
-3. **Filtered Sink**: Event sent through plugin's filtered sink
-4. **Deduplication**: Check if event was seen recently
-5. **Statistics Update**: Update source stats (events count, blocks, etc.)
-6. **Event Forwarding**: Send to main event sink for processing
+3. **Event Forwarding**: Event sent directly to main event sink
+4. **Processing**: Orchestrator handles event processing
 
 ## 🔌 Plugin System
 
 ### DiscoveryPlugin Interface:
+
+The discovery plugin interface extends the base plugin interface with discovery-specific methods:
 
 ```rust
 #[async_trait]
@@ -162,14 +148,9 @@ pub trait DiscoveryPlugin: BasePlugin {
 
 ```rust
 pub struct DiscoveryConfig {
-    pub historical_sync: bool,              // Enable historical block sync
     pub realtime_monitoring: bool,          // Enable real-time monitoring
-    pub dedupe_events: bool,                // Enable event deduplication
-    pub max_event_age_seconds: u64,         // Max age for events (300s)
-    pub max_events_per_second: u64,         // Rate limiting (1000/s)
-    pub event_buffer_size: usize,           // Event buffer size (10000)
-    pub deduplication_window_seconds: u64,  // Dedup window (300s)
-    pub max_concurrent_sources: usize,      // Max active sources (10)
+    pub max_events_per_second: u64,         // Rate limiting config (not enforced)
+    pub max_concurrent_sources: usize,      // Max active sources
 }
 ```
 
@@ -186,8 +167,7 @@ let event_sink = EventSink::new(tx);
 // Build service with plugins
 let service = DiscoveryServiceBuilder::new()
     .with_config(DiscoveryConfig {
-        dedupe_events: true,
-        deduplication_window_seconds: 300,
+        realtime_monitoring: true,
         max_concurrent_sources: 5,
         ..Default::default()
     })
@@ -217,12 +197,8 @@ tokio::spawn(async move {
 // Monitor status
 let status = service.get_status().await;
 for (name, source) in status {
-    println!("{}: {:?} - {} events", name, source.status, source.stats.events_discovered);
+    println!("{}: {:?}", name, source.status);
 }
-
-// Get statistics
-let stats = service.get_stats().await;
-println!("Total events: {}, Rate: {}/min", stats.total_events_discovered, stats.events_per_minute);
 ```
 
 ## 🔍 Critical Observations
@@ -230,25 +206,23 @@ println!("Total events: {}, Rate: {}/min", stats.total_events_discovered, stats.
 ### Strengths:
 
 1. **Plugin Isolation**: Each plugin runs independently with its own mutex
-2. **Comprehensive Statistics**: Detailed tracking per source and globally
-3. **Event Deduplication**: Prevents processing duplicate events
-4. **Flexible Configuration**: Extensive configuration options
-5. **Multi-Chain Support**: Can monitor multiple chains simultaneously
+2. **Multi-Chain Support**: Can monitor multiple chains simultaneously
+3. **Flexible Configuration**: Configurable monitoring options
+4. **Clean Architecture**: Well-separated concerns between service and plugins
 
 ### Areas of Concern:
 
 1. **Double Mutex**: Plugins wrapped in `Arc<Mutex<Box<dyn DiscoveryPlugin>>>` - redundant Arc
-2. **mod.rs Confusion**: The mod.rs file appears to be unused boilerplate
-3. **Missing Rate Limiting**: Config has `max_events_per_second` but no implementation
-4. **No Event Filtering**: All events forwarded, no source-level filtering
-5. **Memory Growth**: Deduplication cache grows until cleanup, could be optimized
+2. **Missing Rate Limiting**: Config has `max_events_per_second` but no enforcement
+3. **No Statistics**: No built-in metrics or statistics tracking
+4. **Basic Status Tracking**: Limited to operational status only
 
 ### Potential Optimizations:
 
 1. **Simplify Plugin Storage**: Remove redundant Arc wrapper
 2. **Implement Rate Limiting**: Add rate limiter per source
-3. **Event Filtering**: Add configurable event filters at source level
-4. **Bloom Filter**: Use bloom filter for deduplication (memory efficient)
+3. **Add Statistics**: Track events discovered, errors, performance metrics
+4. **Event Filtering**: Add configurable event filters at source level
 5. **Metrics Export**: Add Prometheus metrics export
 
 ## 🔗 Dependencies
@@ -273,44 +247,40 @@ println!("Total events: {}, Rate: {}/min", stats.total_events_discovered, stats.
 ### Service Lifecycle:
 
 1. **Plugin Registration**: Plugins initialized and registered
-2. **Source Activation**: Start monitoring creates filtered sink
-3. **Event Discovery**: Plugins send events through filtered sink
-4. **Deduplication**: Events checked against recent history
-5. **Statistics Update**: Per-source stats updated in real-time
-6. **Event Forwarding**: Valid events sent to orchestrator
+2. **Source Activation**: Start monitoring with provided event sink
+3. **Event Discovery**: Plugins send events through sink
+4. **Status Updates**: Source status tracked in real-time
+5. **Event Forwarding**: Events sent to orchestrator
 
 ### Concurrency Model:
 
 - Each plugin runs in its own async task
-- Filtered sinks spawn dedicated forwarding tasks
-- Statistics updates use RwLock for concurrent access
-- Event deduplication uses async RwLock
+- Status updates use RwLock for concurrent access
+- Direct event forwarding without buffering
 
-## 🐛 Known Issues & Cruft
+## 🐛 Known Issues & Limitations
 
-1. **Unused mod.rs**: The mod.rs file contains incorrect re-exports and appears unused
-2. **Rate Limiting Missing**: Configuration exists but no implementation
-3. **Historical Sync**: Config flag exists but no implementation in service
-4. **Event Age Filtering**: `max_event_age_seconds` configured but not enforced
-5. **Plugin Double-Lock**: Unnecessary complexity in plugin storage type
-6. **No Graceful Shutdown**: Plugins stopped immediately without draining
+1. **No Rate Limiting**: Configuration exists but not implemented
+2. **No Statistics**: No metrics or performance tracking
+3. **No Event Filtering**: All events forwarded without filtering
+4. **Plugin Double-Lock**: Unnecessary complexity in plugin storage type
+5. **No Graceful Shutdown**: Plugins stopped immediately without draining
 
 ## 🔮 Future Improvements
 
 1. **Rate Limiting**: Implement per-source rate limiting
 2. **Event Filtering**: Add source-level event filtering
-3. **Historical Sync**: Implement historical block range discovery
-4. **Graceful Shutdown**: Allow plugins to finish processing before stop
-5. **Circuit Breaker**: Add circuit breaker for failing sources
-6. **Plugin Hot Reload**: Support adding/removing plugins at runtime
-7. **Event Replay**: Support replaying events from specific block
+3. **Statistics**: Add comprehensive metrics tracking
+4. **Event Deduplication**: Prevent duplicate event processing
+5. **Historical Sync**: Implement historical block range discovery
+6. **Graceful Shutdown**: Allow plugins to finish processing before stop
+7. **Circuit Breaker**: Add circuit breaker for failing sources
+8. **Plugin Hot Reload**: Support adding/removing plugins at runtime
 
 ## 📊 Performance Considerations
 
-- **Lock Contention**: Multiple RwLocks could cause contention
-- **Channel Overhead**: Each plugin has dedicated channel and task
-- **Deduplication Cost**: Hash map lookups for every event
-- **Statistics Updates**: Frequent writes to shared state
+- **Lock Contention**: Multiple RwLocks could cause contention under load
+- **Direct Forwarding**: No buffering means backpressure affects plugins
 - **No Batching**: Events processed individually, not batched
 
 ## ⚠️ Security Considerations
@@ -320,4 +290,4 @@ println!("Total events: {}, Rate: {}/min", stats.total_events_discovered, stats.
 - **Event Validation**: No validation of event data integrity
 - **Resource Limits**: No protection against malicious plugins
 
-The `solver-discovery` service provides a robust foundation for multi-chain event discovery with good statistics and monitoring, though some configuration options lack implementation.
+The `solver-discovery` service provides a foundation for multi-chain event discovery with a clean plugin architecture, though several features mentioned in configuration are not yet implemented.

@@ -282,9 +282,6 @@ pub fn create_builtin_plugin_factory() -> PluginFactory {
 		fn create_plugin(&self, config: PluginConfig) -> PluginResult<Box<dyn StatePlugin>> {
 			let memory_config = InMemoryConfig {
 				max_entries: config.get_number("max_entries").map(|n| n as usize),
-				default_ttl: config
-					.get_number("default_ttl_seconds")
-					.map(|n| std::time::Duration::from_secs(n as u64)),
 			};
 			let plugin = InMemoryStatePlugin::with_config(memory_config);
 			Ok(Box::new(plugin))
@@ -347,7 +344,6 @@ pub fn create_builtin_plugin_factory() -> PluginFactory {
 			let enable_eip1559 = config.get_bool("enable_eip1559").unwrap_or(true);
 			let confirmation_blocks = config.get_number("confirmation_blocks").unwrap_or(12) as u32;
 			let nonce_management = config.get_bool("nonce_management").unwrap_or(true);
-			let mempool_monitoring = config.get_bool("mempool_monitoring").unwrap_or(false);
 			let max_pending_transactions = config
 				.get_number("max_pending_transactions")
 				.unwrap_or(1000) as usize;
@@ -363,7 +359,6 @@ pub fn create_builtin_plugin_factory() -> PluginFactory {
 				enable_eip1559,
 				confirmation_blocks,
 				nonce_management,
-				mempool_monitoring,
 				max_pending_transactions,
 			};
 			let plugin = EvmEthersDeliveryPlugin::with_config(evm_config);
@@ -391,8 +386,6 @@ pub fn create_builtin_plugin_factory() -> PluginFactory {
 			let discovery_config = Eip7683OnchainConfig {
 				chain_id,
 				rpc_url,
-				timeout_ms: config.get_number("timeout_ms").unwrap_or(30000) as u64,
-				max_retries: config.get_number("max_retries").unwrap_or(3) as u32,
 				input_settler_addresses: config
 					.get_array("input_settler_addresses")
 					.unwrap_or_default()
@@ -408,7 +401,6 @@ pub fn create_builtin_plugin_factory() -> PluginFactory {
 				monitor_open: config.get_bool("monitor_open").unwrap_or(true),
 				monitor_finalised: config.get_bool("monitor_finalised").unwrap_or(true),
 				monitor_order_purchased: config.get_bool("monitor_order_purchased").unwrap_or(true),
-				batch_size: config.get_number("batch_size").unwrap_or(100) as u32,
 				poll_interval_ms,
 				max_blocks_per_request: config.get_number("max_blocks_per_request").unwrap_or(1000)
 					as u64,

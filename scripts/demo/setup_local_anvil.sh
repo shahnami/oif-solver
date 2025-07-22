@@ -388,9 +388,7 @@ plugin_type = "eip7683_onchain"
 [plugins.discovery.origin_discovery.config]
 chain_id = $ORIGIN_CHAIN_ID
 rpc_url = "$ORIGIN_RPC_URL"
-timeout_ms = 30000
 poll_interval_ms = 3000
-batch_size = 100
 # Origin chain contracts
 input_settler_addresses = ["$INPUT_SETTLER_ADDRESS"]
 # Event monitoring - only monitor Open events on origin
@@ -408,9 +406,7 @@ plugin_type = "eip7683_onchain"
 [plugins.discovery.dest_discovery.config]
 chain_id = $DEST_CHAIN_ID
 rpc_url = "$DEST_RPC_URL"
-timeout_ms = 30000
 poll_interval_ms = 3000
-batch_size = 100
 # Destination chain contracts
 output_settler_addresses = ["$OUTPUT_SETTLER_ADDRESS"]
 # Event monitoring - only monitor fills and settlements on destination
@@ -487,8 +483,6 @@ solver_address = "$PUBLIC_KEY"
 output_settler_address = "$OUTPUT_SETTLER_ADDRESS"
 input_settler_addresses = ["$INPUT_SETTLER_ADDRESS"]
 oracle_address = "$ORACLE_ADDRESS"
-origin_token_address = "$ORIGIN_TOKEN_ADDRESS"
-destination_token_address = "$DEST_TOKEN_ADDRESS"
 max_order_age_seconds = 86400
 min_fill_deadline_seconds = 300
 validate_signatures = false  # Disable for local testing

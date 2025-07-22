@@ -132,12 +132,20 @@ impl BasePlugin for FileStatePlugin {
 		Ok(())
 	}
 
-	fn validate_config(&self, _config: &PluginConfig) -> PluginResult<()> {
-		if !self.config.storage_path.is_absolute() && !self.config.storage_path.starts_with("./") {
-			return Err(PluginError::InvalidConfiguration(
-				"Storage path must be absolute or start with './'".to_string(),
-			));
+	fn validate_config(&self, config: &PluginConfig) -> PluginResult<()> {
+		// Use schema validation
+		let schema = self.config_schema();
+		schema.validate(config)?;
+
+		// Additional custom validation
+		if let Some(storage_path) = config.get_string("storage_path") {
+			if storage_path.is_empty() {
+				return Err(PluginError::InvalidConfiguration(
+					"storage_path cannot be empty".to_string(),
+				));
+			}
 		}
+
 		Ok(())
 	}
 

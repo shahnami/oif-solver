@@ -32,13 +32,11 @@ pub struct InMemoryStatePlugin {
 /// Configuration for the in-memory state plugin.
 ///
 /// Defines operational parameters for the in-memory storage including
-/// capacity limits and default expiration times for entries.
+/// capacity limits.
 #[derive(Debug, Clone, Default)]
 pub struct InMemoryConfig {
 	/// Maximum number of entries allowed in storage (None for unlimited)
 	pub max_entries: Option<usize>,
-	/// Default time-to-live for entries (None for no expiration)
-	pub default_ttl: Option<Duration>,
 }
 
 impl InMemoryStatePlugin {
@@ -81,7 +79,20 @@ impl BasePlugin for InMemoryStatePlugin {
 		Ok(())
 	}
 
-	fn validate_config(&self, _config: &PluginConfig) -> PluginResult<()> {
+	fn validate_config(&self, config: &PluginConfig) -> PluginResult<()> {
+		// Use schema validation
+		let schema = self.config_schema();
+		schema.validate(config)?;
+
+		// Additional custom validation
+		if let Some(max_entries) = config.get_number("max_entries") {
+			if max_entries <= 0 {
+				return Err(PluginError::InvalidConfiguration(
+					"max_entries must be positive".to_string(),
+				));
+			}
+		}
+
 		Ok(())
 	}
 
@@ -149,7 +160,7 @@ impl StatePlugin for InMemoryStatePlugin {
 				max_value_size: None,
 				max_keys: self.config.max_entries.map(|n| n as u64),
 				max_storage_size: None,
-				max_ttl: self.config.default_ttl.map(|d| d.as_secs()),
+				max_ttl: None,
 			},
 			settings: HashMap::new(),
 		})

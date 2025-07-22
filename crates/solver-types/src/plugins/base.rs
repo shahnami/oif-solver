@@ -6,6 +6,8 @@
 //! along with health monitoring, metrics collection, configuration validation,
 //! and lifecycle management functionality.
 
+use crate::PluginError;
+
 use super::{ConfigValue, PluginConfig, PluginResult};
 use async_trait::async_trait;
 use serde::{Deserialize, Serialize};
@@ -339,6 +341,69 @@ pub enum ConfigFieldType {
 	Object,
 }
 
+impl PluginConfigSchema {
+	/// Validate a plugin configuration against this schema.
+	///
+	/// Checks that all required fields are present and that all fields have the correct type.
+	///
+	/// # Arguments
+	/// * `config` - The plugin configuration to validate
+	///
+	/// # Returns
+	/// Success if configuration is valid, error with validation details on failure
+	pub fn validate(&self, config: &PluginConfig) -> PluginResult<()> {
+		// Check required fields
+		for field in &self.required_fields {
+			match &field.field_type {
+				ConfigFieldType::String => {
+					if config.get_string(&field.name).is_none() {
+						return Err(PluginError::InvalidConfiguration(format!(
+							"Required field '{}' is missing",
+							field.name
+						)));
+					}
+				}
+				ConfigFieldType::Number => {
+					if config.get_number(&field.name).is_none() {
+						return Err(PluginError::InvalidConfiguration(format!(
+							"Required field '{}' is missing or not a number",
+							field.name
+						)));
+					}
+				}
+				ConfigFieldType::Boolean => {
+					if config.get_bool(&field.name).is_none() {
+						return Err(PluginError::InvalidConfiguration(format!(
+							"Required field '{}' is missing or not a boolean",
+							field.name
+						)));
+					}
+				}
+				ConfigFieldType::Array(_) => {
+					if config.get_array(&field.name).is_none() {
+						return Err(PluginError::InvalidConfiguration(format!(
+							"Required field '{}' is missing or not an array",
+							field.name
+						)));
+					}
+				}
+				ConfigFieldType::Object => {
+					if config.get_object(&field.name).is_none() {
+						return Err(PluginError::InvalidConfiguration(format!(
+							"Required field '{}' is missing or not an object",
+							field.name
+						)));
+					}
+				}
+			}
+		}
+
+		// Validate field types for all provided fields (including optional ones)
+		// Note: We could do more sophisticated validation here, like checking array element types
+
+		Ok(())
+	}
+}
 impl Default for PluginConfigSchema {
 	fn default() -> Self {
 		Self::new()

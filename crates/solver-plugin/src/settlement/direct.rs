@@ -10,6 +10,7 @@ use async_trait::async_trait;
 use serde::{Deserialize, Serialize};
 use solver_types::*;
 use std::any::Any;
+use tracing::debug;
 
 /// Direct settlement plugin - settles immediately on origin chain.
 ///
@@ -93,6 +94,7 @@ impl BasePlugin for DirectSettlementPlugin {
 
 	/// Initializes the plugin with configuration parameters.
 	async fn initialize(&mut self, config: PluginConfig) -> PluginResult<()> {
+		debug!("Initializing Direct settlement plugin");
 		// Parse configuration
 		if let Some(ConfigValue::String(oracle)) = config.config.get("oracle_address") {
 			self.config.oracle_address = oracle.clone();
@@ -116,12 +118,34 @@ impl BasePlugin for DirectSettlementPlugin {
 		Ok(())
 	}
 
-	/// Validates plugin configuration parameters.
 	fn validate_config(&self, config: &PluginConfig) -> PluginResult<()> {
-		if !config.config.contains_key("oracle_address") {
-			return Err(PluginError::InvalidConfiguration(
-				"oracle_address is required".to_string(),
-			));
+		// Use schema validation
+		let schema = self.config_schema();
+		schema.validate(config)?;
+
+		// Additional custom validation
+		if let Some(min_confirmations) = config.get_number("min_confirmations") {
+			if min_confirmations < 0 {
+				return Err(PluginError::InvalidConfiguration(
+					"min_confirmations cannot be negative".to_string(),
+				));
+			}
+		}
+
+		if let Some(dispute_period) = config.get_number("dispute_period_seconds") {
+			if dispute_period < 0 {
+				return Err(PluginError::InvalidConfiguration(
+					"dispute_period_seconds cannot be negative".to_string(),
+				));
+			}
+		}
+
+		if let Some(claim_window) = config.get_number("claim_window_seconds") {
+			if claim_window < 0 {
+				return Err(PluginError::InvalidConfiguration(
+					"claim_window_seconds cannot be negative".to_string(),
+				));
+			}
 		}
 
 		Ok(())

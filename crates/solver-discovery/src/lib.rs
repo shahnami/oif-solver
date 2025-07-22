@@ -10,8 +10,7 @@
 //!
 //! - [`DiscoveryService`] - Low-level service that manages discovery plugins
 //! - [`DiscoveryManager`] - High-level manager with simplified interface
-//! - Event deduplication and filtering
-//! - Historical discovery support
+//! - Event filtering
 //! - Multi-chain monitoring
 
 use serde::Serialize;

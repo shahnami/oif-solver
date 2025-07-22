@@ -119,9 +119,7 @@ pub struct PluginFactory {
 
 - Monitors blockchain for EIP-7683 events (Open, Finalised, OrderPurchased)
 - Configurable polling intervals
-- Historical sync support
 - Multi-contract monitoring
-- Event deduplication
 
 ### 4. **Delivery Plugins** (`delivery/`)
 
@@ -192,7 +190,6 @@ let factory = global_plugin_factory();
 // Create a state plugin
 let mut config = PluginConfig::default();
 config.set("max_entries", 10000);
-config.set("default_ttl_seconds", 3600);
 let state_plugin = factory.create_state_plugin("memory", config)?;
 
 // Create a discovery plugin

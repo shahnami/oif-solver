@@ -14,13 +14,15 @@ use hex;
 use serde::{Deserialize, Serialize};
 use solver_types::plugins::*;
 use solver_types::Event;
-use std::any::Any;
+
 use std::collections::HashMap;
 use std::sync::Arc;
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 use tokio::sync::{mpsc, RwLock};
 use tokio::time::interval;
 use tracing::{debug, error, info, warn};
+
+use std::any::Any;
 
 /// State tracking for blockchain monitoring.
 ///
@@ -77,10 +79,6 @@ pub struct Eip7683OnchainConfig {
 	pub chain_id: ChainId,
 	/// RPC endpoint URL
 	pub rpc_url: String,
-	/// Request timeout in milliseconds
-	pub timeout_ms: u64,
-	/// Maximum retry attempts for failed requests
-	pub max_retries: u32,
 
 	/// Input settler contract addresses to monitor
 	pub input_settler_addresses: Vec<String>,
@@ -94,8 +92,6 @@ pub struct Eip7683OnchainConfig {
 	/// Whether to monitor OrderPurchased events (order updates)
 	pub monitor_order_purchased: bool,
 
-	/// Number of events to process in batch
-	pub batch_size: u32,
 	/// Block polling interval in milliseconds
 	pub poll_interval_ms: u64,
 	/// Maximum blocks to query per request
@@ -112,14 +108,11 @@ impl Default for Eip7683OnchainConfig {
 		Self {
 			chain_id: 1,
 			rpc_url: "https://eth-mainnet.g.alchemy.com/v2/YOUR_KEY".to_string(),
-			timeout_ms: 30000,
-			max_retries: 3,
 			input_settler_addresses: Vec::new(),
 			output_settler_addresses: Vec::new(),
 			monitor_open: true,
 			monitor_finalised: true,
 			monitor_order_purchased: true,
-			batch_size: 100,
 			poll_interval_ms: 12000, // 12 seconds (Ethereum block time)
 			max_blocks_per_request: 1000,
 			enable_historical_sync: false,
@@ -696,16 +689,12 @@ impl BasePlugin for Eip7683OnchainDiscoveryPlugin {
 			self.config.rpc_url = rpc_url;
 		}
 
-		if let Some(timeout) = config.get_number("timeout_ms") {
-			self.config.timeout_ms = timeout as u64;
-		}
-
 		if let Some(poll_interval) = config.get_number("poll_interval_ms") {
 			self.config.poll_interval_ms = poll_interval as u64;
 		}
 
-		if let Some(batch_size) = config.get_number("batch_size") {
-			self.config.batch_size = batch_size as u32;
+		if let Some(max_blocks) = config.get_number("max_blocks_per_request") {
+			self.config.max_blocks_per_request = max_blocks as u64;
 		}
 
 		// Parse contract addresses
@@ -748,12 +737,11 @@ impl BasePlugin for Eip7683OnchainDiscoveryPlugin {
 	}
 
 	fn validate_config(&self, config: &PluginConfig) -> PluginResult<()> {
-		if config.get_string("rpc_url").is_none() {
-			return Err(PluginError::InvalidConfiguration(
-				"rpc_url is required".to_string(),
-			));
-		}
+		// Use schema validation
+		let schema = self.config_schema();
+		schema.validate(config)?;
 
+		// Additional custom validation
 		if let Some(chain_id) = config.get_number("chain_id") {
 			if chain_id <= 0 {
 				return Err(PluginError::InvalidConfiguration(
@@ -763,27 +751,32 @@ impl BasePlugin for Eip7683OnchainDiscoveryPlugin {
 		}
 
 		if let Some(poll_interval) = config.get_number("poll_interval_ms") {
-			if poll_interval < 1000 {
+			if poll_interval < 100 {
 				return Err(PluginError::InvalidConfiguration(
-					"poll_interval_ms must be at least 1000".to_string(),
+					"poll_interval_ms must be at least 100".to_string(),
 				));
 			}
 		}
 
-		// Validate that at least one contract address is provided
-		let has_input_settlers = config
-			.get_array("input_settler_addresses")
-			.map(|arr| !arr.is_empty())
-			.unwrap_or(false);
-		let has_output_settlers = config
-			.get_array("output_settler_addresses")
-			.map(|arr| !arr.is_empty())
-			.unwrap_or(false);
+		// Validate that at least one settler address is specified if monitoring is enabled
+		let monitor_open = config.get_bool("monitor_open").unwrap_or(true);
+		let monitor_finalised = config.get_bool("monitor_finalised").unwrap_or(true);
+		let monitor_purchased = config.get_bool("monitor_order_purchased").unwrap_or(true);
 
-		if !has_input_settlers && !has_output_settlers {
-			return Err(PluginError::InvalidConfiguration(
-				"At least one settler address must be provided".to_string(),
-			));
+		if monitor_open || monitor_finalised || monitor_purchased {
+			let input_settlers = config
+				.get_array("input_settler_addresses")
+				.unwrap_or_default();
+			let output_settlers = config
+				.get_array("output_settler_addresses")
+				.unwrap_or_default();
+
+			if input_settlers.is_empty() && output_settlers.is_empty() {
+				return Err(PluginError::InvalidConfiguration(
+					"At least one settler address must be configured when monitoring is enabled"
+						.to_string(),
+				));
+			}
 		}
 
 		Ok(())
@@ -869,22 +862,16 @@ impl BasePlugin for Eip7683OnchainDiscoveryPlugin {
 			.required("chain_id", ConfigFieldType::Number, "EVM chain ID")
 			.required("rpc_url", ConfigFieldType::String, "RPC endpoint URL")
 			.optional(
-				"timeout_ms",
-				ConfigFieldType::Number,
-				"Request timeout in milliseconds",
-				Some(ConfigValue::from(30000i64)),
-			)
-			.optional(
 				"poll_interval_ms",
 				ConfigFieldType::Number,
 				"Block polling interval in milliseconds",
 				Some(ConfigValue::from(12000i64)),
 			)
 			.optional(
-				"batch_size",
+				"max_blocks_per_request",
 				ConfigFieldType::Number,
-				"Number of events to process in batch",
-				Some(ConfigValue::from(100i64)),
+				"Maximum blocks to query per request",
+				Some(ConfigValue::from(1000i64)),
 			)
 			.optional(
 				"input_settler_addresses",
@@ -1110,7 +1097,6 @@ mod tests {
 			.with_config("chain_id", 1i64)
 			.with_config("rpc_url", "http://localhost:8545")
 			.with_config("poll_interval_ms", 5000i64)
-			.with_config("batch_size", 50i64)
 			.with_config(
 				"input_settler_addresses",
 				ConfigValue::Array(vec![ConfigValue::String(

@@ -90,8 +90,6 @@ pub struct EvmEthersConfig {
 	pub confirmation_blocks: u32,
 	/// Whether to manage nonces internally
 	pub nonce_management: bool,
-	/// Whether to monitor mempool for transaction status
-	pub mempool_monitoring: bool,
 	/// Maximum number of pending transactions to track
 	pub max_pending_transactions: usize,
 }
@@ -522,7 +520,6 @@ impl Default for EvmEthersConfig {
 			enable_eip1559: true,
 			confirmation_blocks: 12,
 			nonce_management: true,
-			mempool_monitoring: false,
 			max_pending_transactions: 1000,
 		}
 	}
@@ -550,6 +547,7 @@ impl BasePlugin for EvmEthersDeliveryPlugin {
 	}
 
 	async fn initialize(&mut self, config: PluginConfig) -> PluginResult<()> {
+		debug!("Initializing EVM Ethers delivery plugin");
 		// Parse configuration
 		if let Some(chain_id) = config.get_number("chain_id") {
 			self.config.chain_id = chain_id as ChainId;
@@ -573,8 +571,20 @@ impl BasePlugin for EvmEthersDeliveryPlugin {
 			self.config.timeout_ms = timeout as u64;
 		}
 
+		if let Some(gas_price_multiplier) = config.get_number("gas_price_multiplier") {
+			self.config.gas_price_multiplier = gas_price_multiplier as f64;
+		}
+
+		if let Some(max_gas_price) = config.get_number("max_gas_price") {
+			self.config.max_gas_price = Some(max_gas_price as u64);
+		}
+
 		if let Some(enable_eip1559) = config.get_bool("enable_eip1559") {
 			self.config.enable_eip1559 = enable_eip1559;
+		}
+
+		if let Some(confirmation_blocks) = config.get_number("confirmation_blocks") {
+			self.config.confirmation_blocks = confirmation_blocks as u32;
 		}
 
 		if let Some(nonce_management) = config.get_bool("nonce_management") {
@@ -594,18 +604,11 @@ impl BasePlugin for EvmEthersDeliveryPlugin {
 	}
 
 	fn validate_config(&self, config: &PluginConfig) -> PluginResult<()> {
-		if config.get_string("rpc_url").is_none() {
-			return Err(PluginError::InvalidConfiguration(
-				"rpc_url is required".to_string(),
-			));
-		}
+		// Use schema validation
+		let schema = self.config_schema();
+		schema.validate(config)?;
 
-		if config.get_string("private_key").is_none() {
-			return Err(PluginError::InvalidConfiguration(
-				"private_key is required".to_string(),
-			));
-		}
-
+		// Additional custom validation
 		if let Some(chain_id) = config.get_number("chain_id") {
 			if chain_id <= 0 {
 				return Err(PluginError::InvalidConfiguration(
@@ -618,6 +621,14 @@ impl BasePlugin for EvmEthersDeliveryPlugin {
 			if timeout < 1000 {
 				return Err(PluginError::InvalidConfiguration(
 					"timeout_ms must be at least 1000".to_string(),
+				));
+			}
+		}
+
+		if let Some(gas_price_multiplier) = config.get_number("gas_price_multiplier") {
+			if gas_price_multiplier <= 0 {
+				return Err(PluginError::InvalidConfiguration(
+					"gas_price_multiplier must be positive".to_string(),
 				));
 			}
 		}
@@ -728,10 +739,28 @@ impl BasePlugin for EvmEthersDeliveryPlugin {
 				Some(ConfigValue::from(30000i64)),
 			)
 			.optional(
+				"gas_price_multiplier",
+				ConfigFieldType::Number,
+				"Multiplier for gas price (e.g., 1.1 for 10% increase)",
+				Some(ConfigValue::from("1.1")),
+			)
+			.optional(
+				"max_gas_price",
+				ConfigFieldType::Number,
+				"Maximum allowed gas price in wei",
+				None,
+			)
+			.optional(
 				"enable_eip1559",
 				ConfigFieldType::Boolean,
 				"Enable EIP-1559 type 2 transactions",
 				Some(ConfigValue::from(true)),
+			)
+			.optional(
+				"confirmation_blocks",
+				ConfigFieldType::Number,
+				"Number of blocks to wait for transaction confirmation",
+				Some(ConfigValue::from(0i64)),
 			)
 			.optional(
 				"nonce_management",
@@ -744,12 +773,6 @@ impl BasePlugin for EvmEthersDeliveryPlugin {
 				ConfigFieldType::Number,
 				"Maximum number of pending transactions to track",
 				Some(ConfigValue::from(1000i64)),
-			)
-			.optional(
-				"gas_price_multiplier",
-				ConfigFieldType::Number,
-				"Multiplier for gas price (e.g., 1.1 for 10% increase)",
-				Some(ConfigValue::from("1.1")),
 			)
 	}
 

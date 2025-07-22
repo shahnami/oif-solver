@@ -12,108 +12,49 @@ The OIF Solver is designed to:
 - Provide comprehensive monitoring and observability
 - Support multiple order types and protocols (currently EIP-7683)
 
-## Architecture Diagram
+## High-Level Architecture
 
+```mermaid
+sequenceDiagram
+    participant External as External Sources
+    participant Discovery as Discovery Service
+    participant Core as Core Engine
+    participant State as State Service
+    participant Delivery as Delivery Service
+    participant Settlement as Settlement Service
+
+    Note over External,Settlement: Intent Discovery & Processing
+    External->>Discovery: New Intent Event
+    Discovery->>State: Store Intent
+    Discovery->>Core: Intent Discovered
+
+    Note over Core,Settlement: Intent Processing
+    Core->>State: Get Intent Details
+    Core->>Delivery: Process Intent
+    Delivery->>State: Store Transaction
+    Delivery->>Core: Transaction Submitted
+
+    Note over Core,Settlement: Settlement Processing
+    Core->>Settlement: Handle Fill Event
+    Settlement->>State: Get Transaction Data
+    Settlement->>Delivery: Submit Settlement
+    Settlement->>Core: Settlement Complete
 ```
-┌─────────────────────────────────────────────────────────────────────────────────────────┐
-│                                 External Sources                                        │
-│  ┌──────────────┐  ┌──────────────┐  ┌──────────────┐  ┌─────────────┐  ┌────────────┐  │
-│  │  Blockchain  │  │   Off-chain  │  │    Oracle    │  │  Settlement │  │  External  │  │
-│  │    Nodes     │  │   Intent     │  │ Attestation  │  │  Contracts  │  │    APIs    │  │
-│  │  (EVM, etc)  │  │   Sources    │  │  Services    │  │   (claims)   │  │            │  │
-│  └──────┬───────┘  └──────┬───────┘  └──────┬───────┘  └──────┬──────┘  └──────┬─────┘  │
-└─────────┼─────────────────┼─────────────────┼─────────────────┼───────────────────┼─────┘
-          │                 │                 │                 │                   │
-┌─────────┼─────────────────┼─────────────────┼─────────────────┼───────────────────┼─────┐
-│         ▼                 ▼                 ▼                 ▼                   ▼     │
-│  ┌─────────────────────────────────────────────────────────────────────────────────┐    │
-│  │                      solver-service (API & Main Binary)                        │    │
-│  │  ┌─────────────┐  ┌──────────────┐  ┌─────────────┐  ┌───────────────────────┐  │    │
-│  │  │  /health    │  │    /api      │  │  /metrics   │  │   CLI & Signal        │  │    │
-│  │  │ /health/*   │  │   /admin     │  │ (Prometheus)│  │     Handling          │  │    │
-│  │  └─────────────┘  └──────────────┘  └─────────────┘  └───────────────────────┘  │    │
-│  └─────────────────────────────────────────────────────────────────────────────────┘    │
-│                                      │                                                  │
-│                                      ▼                                                  │
-│  ┌─────────────────────────────────────────────────────────────────────────────────┐    │
-│  │                     solver-core (Event-Driven Orchestrator)                     │    │
-│  │  ┌────────────┐   ┌──────────────┐   ┌────────────┐   ┌──────────────────────┐  │    │
-│  │  │ Lifecycle  │◄──┤    Event     ├──►│  Service   │◄──┤    Fill Tracking     │  │    │
-│  │  │  Manager   │   │  Processor   │   │  Manager   │   │   & Monitoring       │  │    │
-│  │  └────────────┘   └──────────────┘   └────────────┘   └──────────────────────┘  │    │
-│  └─────────────────────────────────────────────────────────────────────────────────┘    │
-│                                      │                                                  │
-│                         ┌────────────┼────────────┐                                     │
-│                         ▼            ▼            ▼                                     │
-│  ┌────────────────┐ ┌──────────────────┐ ┌────────────────┐ ┌──────────────────────┐   │
-│  │ solver-state   │ │ solver-discovery │ │ solver-delivery│ │ solver-settlement    │   │
-│  ├────────────────┤ ├──────────────────┤ ├────────────────┤ ├──────────────────────┤   │
-│  │ • Plugin Mgmt  │ │ • Plugin Mgmt    │ │ • Plugin Mgmt  │ │ • Fill Monitoring    │   │
-│  │ • Backend API  │ │ • Event Dedup    │ │ • TX Routing   │ │ • Oracle Checks      │   │
-│  │ • TTL Support  │ │ • Multi-chain    │ │ • Status Track │ │ • Settlement Events  │   │
-│  └────────────────┘ └──────────────────┘ └────────────────┘ └──────────────────────┘   │
-│         │                    │                    │                     │              │
-│         ▼                    ▼                    ▼                     ▼              │
-│  ┌─────────────────────────────────────────────────────────────────────────────────┐    │
-│  │                        solver-plugin (Plugin Factory)                           │    │
-│  │  ┌───────────────┐  ┌───────────────┐  ┌───────────────┐  ┌──────────────────┐  │    │
-│  │  │ State Plugins │  │Discovery Plugs│  │Delivery Plugs │  │Settlement Plugs  │  │    │
-│  │  ├───────────────┤  ├───────────────┤  ├───────────────┤  ├──────────────────┤  │    │
-│  │  │ • Memory      │  │ • EIP-7683    │  │ • EVM Ethers  │  │ • Direct         │  │    │
-│  │  │ • File        │  │   OnChain     │  │               │  │ • Arbitrum       │  │    │
-│  │  └───────────────┘  └───────────────┘  └───────────────┘  └──────────────────┘  │    │
-│  │                                  ┌───────────────┐                               │    │
-│  │                                  │Order Processor│                               │    │
-│  │                                  ├───────────────┤                               │    │
-│  │                                  │ • EIP-7683    │                               │    │
-│  │                                  │   Parser      │                               │    │
-│  │                                  └───────────────┘                               │    │
-│  └─────────────────────────────────────────────────────────────────────────────────┘    │
-│                                                                                         │
-│  ┌─────────────────────────────────────────────────────────────────────────────────┐    │
-│  │                    solver-types (Plugin Interface Layer)                        │    │
-│  │  ┌──────────────────────────────────────────────────────────────────────────┐  │    │
-│  │  │ Plugin Traits: BasePlugin, StatePlugin, DiscoveryPlugin,                 │  │    │
-│  │  │               DeliveryPlugin, SettlementPlugin, OrderProcessor           │  │    │
-│  │  └──────────────────────────────────────────────────────────────────────────┘  │    │
-│  │  ┌──────────────────────────────────────────────────────────────────────────┐  │    │
-│  │  │ Core Types: Event System, Configuration Structs, Error Types             │  │    │
-│  │  └──────────────────────────────────────────────────────────────────────────┘  │    │
-│  └─────────────────────────────────────────────────────────────────────────────────┘    │
-│                                                                                         │
-│  ┌─────────────────────────────────────────────────────────────────────────────────┐    │
-│  │                         solver-config (Configuration)                           │    │
-│  │  TOML Loading • Environment Variables • Validation • Error Handling             │    │
-│  └─────────────────────────────────────────────────────────────────────────────────┘    │
-└─────────────────────────────────────────────────────────────────────────────────────────┘
-```
+
+The solver uses a **plugin-based architecture** where each component can be extended through plugins without modifying core logic.
 
 ## Architecture
 
 The solver is built as a modular Rust workspace with a **plugin-based architecture** that enables flexible extensibility:
 
-### Core Infrastructure
-
-- **solver-types**: Foundational type system and plugin interfaces that define the contract for all extensible components
-- **solver-core**: Plugin-based orchestration engine that coordinates all services through event-driven communication
-- **solver-service**: HTTP API service and main executable binary with health checks and metrics endpoints
-- **solver-config**: Configuration management system with TOML loading and environment variable support
-
-### Plugin System
-
-- **solver-plugin**: Comprehensive plugin implementations including:
-  - **State Plugins**: Memory and file-based storage backends
-  - **Discovery Plugins**: EIP-7683 on-chain event monitoring
-  - **Delivery Plugins**: EVM transaction submission via ethers.rs
-  - **Settlement Plugins**: Direct and Arbitrum-specific settlement strategies
-  - **Order Processors**: EIP-7683 order handling
-
-### Service Layer
-
-- **solver-state**: Unified state management service that abstracts storage backends through plugins
-- **solver-discovery**: Multi-chain order discovery service with event deduplication and comprehensive statistics
-- **solver-delivery**: Transaction submission orchestration with configurable delivery strategies
-- **solver-settlement**: Settlement readiness monitoring and orchestration service
+- **solver-core**: Orchestrates the entire solver workflow and coordinates between services
+- **solver-discovery**: Discovers new intents/orders from various blockchain and off-chain sources
+- **solver-delivery**: Handles transaction preparation, submission, and monitoring across multiple chains
+- **solver-settlement**: Manages settlement verification and claim processing after transaction execution
+- **solver-state**: Provides persistent storage abstraction with TTL management for solver state
+- **solver-plugin**: Contains concrete plugin implementations for different protocols and chains
+- **solver-types**: Defines shared data structures, traits, and interfaces used across all components
+- **solver-service**: Exposes HTTP API endpoints and CLI interface for external interaction
 
 ## Quick Start
 
@@ -296,36 +237,6 @@ The codebase follows these conventions:
 - Error handling uses the `Result` type with custom error variants
 - Async runtime is Tokio
 - Logging uses the `tracing` crate
-
-## Current Implementation Status
-
-### ✅ Fully Implemented
-
-- **Plugin-Based Architecture**: Complete plugin factory system with type-safe plugin creation and management
-- **Core Orchestration**: Event-driven orchestrator with lifecycle management and plugin coordination
-- **EVM Chain Support**: Comprehensive EVM support via ethers.rs with gas optimization and nonce management
-- **EIP-7683 Order Processing**: Complete support for EIP-7683 cross-chain intent discovery and execution
-- **State Management**: Pluggable storage with memory and file backends
-- **Configuration System**: TOML-based config with environment variable substitution and validation
-- **HTTP API Service**: RESTful endpoints with health checks and graceful shutdown
-
-### 🚧 Partially Implemented
-
-- **Transaction Delivery**: Core delivery service with RoundRobin strategy (other strategies configured but not implemented)
-- **Settlement Orchestration**: Settlement monitoring service with plugin interface (some settlement plugins incomplete)
-- **Metrics Collection**: Placeholder metrics endpoints (actual Prometheus metrics not fully integrated)
-- **API Endpoints**: Health and admin endpoints implemented, but order retrieval endpoints return placeholder data
-
-### 🔮 Future Extensions
-
-The plugin architecture enables easy addition of new functionality:
-
-- **Additional Order Types**: Beyond EIP-7683, new order formats can be added as order processor plugins
-- **Multi-Chain Support**: New blockchain networks can be supported by implementing delivery plugins
-- **Advanced Settlement**: Complex settlement strategies can be added as settlement plugins
-- **Liquidity Integration**: DEX and AMM integrations can be implemented as discovery or delivery plugins
-- **Price Oracles**: External price feeds can be integrated as needed through the plugin system
-- **Enhanced Monitoring**: Full Prometheus metrics and distributed tracing integration
 
 ## License
 

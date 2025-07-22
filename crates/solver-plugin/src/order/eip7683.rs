@@ -20,7 +20,7 @@ use std::any::Any;
 use std::collections::HashMap;
 use std::str::FromStr;
 use std::sync::Arc;
-use tracing::info;
+use tracing::{debug, info};
 
 use crate::order::processor::OrderPluginProcessor;
 
@@ -372,21 +372,66 @@ impl BasePlugin for Eip7683OrderPlugin {
 	}
 
 	/// Initializes the plugin with configuration.
-	async fn initialize(&mut self, _config: PluginConfig) -> PluginResult<()> {
-		// Configuration is already loaded in with_config()
-		// This method is kept for BasePlugin trait compliance
-		// and potential future async initialization needs
-		if !self.is_initialized {
-			return Err(PluginError::ExecutionFailed(
-				"Plugin not properly initialized with config".to_string(),
-			));
+	async fn initialize(&mut self, config: PluginConfig) -> PluginResult<()> {
+		debug!("Initializing EIP-7683 order plugin");
+		// Parse configuration
+		if let Some(max_order_age) = config.get_number("max_order_age_seconds") {
+			self.config.max_order_age_seconds = max_order_age as u64;
 		}
+
+		if let Some(min_fill_deadline) = config.get_number("min_fill_deadline_seconds") {
+			self.config.min_fill_deadline_seconds = min_fill_deadline as u64;
+		}
+
+		if let Some(validate_signatures) = config.get_bool("validate_signatures") {
+			self.config.validate_signatures = validate_signatures;
+		}
+
+		// Parse required fields
+		if let Some(solver_address) = config.get_string("solver_address") {
+			self.config.solver_address = solver_address.parse().map_err(|_| {
+				PluginError::InvalidConfiguration("Invalid solver address".to_string())
+			})?;
+		}
+
+		if let Some(output_settler) = config.get_string("output_settler_address") {
+			self.config.output_settler_address = output_settler.parse().map_err(|_| {
+				PluginError::InvalidConfiguration("Invalid output settler address".to_string())
+			})?;
+		}
+
+		// Parse optional arrays
+		if let Some(supported_chains) = config.get_number_array("supported_chains") {
+			self.config.supported_chains = supported_chains.iter().map(|&n| n as ChainId).collect();
+		}
+
+		if let Some(order_data_types) = config.get_array("order_data_types") {
+			self.config.order_data_types = order_data_types;
+		}
+
+		if let Some(input_settlers) = config.get_array("input_settler_addresses") {
+			self.config.input_settler_addresses = input_settlers
+				.iter()
+				.filter_map(|s| s.parse().ok())
+				.collect();
+		}
+
+		if let Some(oracle_address) = config.get_string("oracle_address") {
+			self.config.oracle_address = Some(oracle_address.parse().map_err(|_| {
+				PluginError::InvalidConfiguration("Invalid oracle address".to_string())
+			})?);
+		}
+
+		self.is_initialized = true;
 		Ok(())
 	}
 
-	/// Validates plugin configuration parameters.
 	fn validate_config(&self, config: &PluginConfig) -> PluginResult<()> {
-		// Validate configuration values
+		// Use schema validation
+		let schema = self.config_schema();
+		schema.validate(config)?;
+
+		// Additional custom validation
 		if let Some(max_age) = config.get_number("max_order_age_seconds") {
 			if max_age <= 0 {
 				return Err(PluginError::InvalidConfiguration(
@@ -439,6 +484,16 @@ impl BasePlugin for Eip7683OrderPlugin {
 	/// Returns the configuration schema for the plugin.
 	fn config_schema(&self) -> PluginConfigSchema {
 		PluginConfigSchema::new()
+			.required(
+				"solver_address",
+				ConfigFieldType::String,
+				"Ethereum address of the solver",
+			)
+			.required(
+				"output_settler_address",
+				ConfigFieldType::String,
+				"Address of the OutputSettler7683 contract",
+			)
 			.optional(
 				"max_order_age_seconds",
 				ConfigFieldType::Number,
@@ -457,15 +512,29 @@ impl BasePlugin for Eip7683OrderPlugin {
 				"Whether to validate order signatures",
 				Some(true.into()),
 			)
-			.required(
-				"solver_address",
-				ConfigFieldType::String,
-				"Ethereum address of the solver",
+			.optional(
+				"supported_chains",
+				ConfigFieldType::Array(Box::new(ConfigFieldType::Number)),
+				"List of supported chain IDs",
+				None,
 			)
-			.required(
-				"output_settler_address",
+			.optional(
+				"order_data_types",
+				ConfigFieldType::Array(Box::new(ConfigFieldType::String)),
+				"Supported order data types",
+				None,
+			)
+			.optional(
+				"input_settler_addresses",
+				ConfigFieldType::Array(Box::new(ConfigFieldType::String)),
+				"InputSettler addresses for each chain",
+				None,
+			)
+			.optional(
+				"oracle_address",
 				ConfigFieldType::String,
-				"Address of the OutputSettler7683 contract",
+				"Oracle address for settlement verification",
+				None,
 			)
 	}
 
