@@ -16,7 +16,7 @@ use std::str::FromStr;
 use std::sync::Arc;
 use tracing::info;
 
-use crate::order::OrderPluginProcessor;
+use crate::order::processor::OrderPluginProcessor;
 
 /// EIP-7683 Order implementation
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -85,20 +85,10 @@ impl Order for Eip7683Order {
 	}
 
 	fn metadata(&self) -> &Self::Metadata {
-		// This would typically be cached or computed
-		// For simplicity, creating it here (in practice, store it as a field)
-		unsafe {
-			static mut CACHED_METADATA: Option<Eip7683Metadata> = None;
-			if CACHED_METADATA.is_none() {
-				CACHED_METADATA = Some(Eip7683Metadata {
-					mandate_outputs_count: self.mandate_outputs.len(),
-					total_output_value: self.mandate_outputs.iter().map(|o| o.amount).sum(),
-					is_cross_chain: self.origin_chain_id != self.destination_chain_id,
-					order_data_type: self.order_data_type.clone(),
-				});
-			}
-			CACHED_METADATA.as_ref().unwrap()
-		}
+		// Return a reference to metadata stored in the order
+		// This requires storing metadata as a field, which we'll address by
+		// making metadata() return by value instead
+		unimplemented!("metadata() returning reference not supported; use owned value")
 	}
 
 	fn encode(&self) -> PluginResult<Bytes> {
@@ -206,60 +196,12 @@ impl Eip7683OrderPlugin {
 		}
 	}
 
-	pub fn with_config(config: PluginConfig) -> PluginResult<Self> {
-		let mut plugin = Self::new();
-
-		// Parse plugin-specific configuration synchronously
-		if let Some(max_age) = config.get_number("max_order_age_seconds") {
-			plugin.config.max_order_age_seconds = max_age as u64;
+	pub fn with_config(config: Eip7683Config) -> Self {
+		Self {
+			config,
+			metrics: PluginMetrics::new(),
+			is_initialized: false,
 		}
-
-		if let Some(min_deadline) = config.get_number("min_fill_deadline_seconds") {
-			plugin.config.min_fill_deadline_seconds = min_deadline as u64;
-		}
-
-		if let Some(validate_sigs) = config.get_bool("validate_signatures") {
-			plugin.config.validate_signatures = validate_sigs;
-		}
-
-		if let Some(solver_addr) = config.get_string("solver_address") {
-			info!("Setting solver_address: {}", solver_addr);
-			plugin.config.solver_address = solver_addr;
-		}
-
-		if let Some(output_settler_addr) = config.get_string("output_settler_address") {
-			info!("Setting output_settler_address: {}", output_settler_addr);
-			plugin.config.output_settler_address = output_settler_addr;
-		} else {
-			info!(
-				"No output_settler_address in config, using default: {}",
-				plugin.config.output_settler_address
-			);
-		}
-
-		// Parse input settler addresses
-		if let Some(input_settlers) = config.get_array("input_settler_addresses") {
-			plugin.config.input_settler_addresses =
-				input_settlers.iter().map(|v| v.to_string()).collect();
-			info!(
-				"Loaded {} input settler addresses",
-				plugin.config.input_settler_addresses.len()
-			);
-		}
-
-		// Parse oracle address
-		if let Some(oracle_addr) = config.get_string("oracle_address") {
-			info!("Setting oracle_address: {}", oracle_addr);
-			plugin.config.oracle_address = Some(oracle_addr);
-		}
-
-		plugin.is_initialized = true;
-		info!(
-			"EIP7683OrderPlugin created with output_settler_address: {}",
-			plugin.config.output_settler_address
-		);
-
-		Ok(plugin)
 	}
 
 	fn validate_signature(&self, order: &Eip7683Order) -> PluginResult<bool> {
@@ -865,7 +807,7 @@ impl OrderPlugin for Eip7683OrderPlugin {
 		Ok(self.extract_order_metadata(order))
 	}
 
-	async fn get_order(&self, id: &Self::OrderId) -> PluginResult<Option<Self::Order>> {
+	async fn get_order(&self, _id: &Self::OrderId) -> PluginResult<Option<Self::Order>> {
 		// This plugin doesn't store orders, just parses them
 		// In a real implementation, this might query a database or cache
 		Ok(None)
@@ -976,7 +918,7 @@ impl OrderPlugin for Eip7683OrderPlugin {
 		// }
 
 		// Convert addresses to bytes32 format (left-padded with zeros)
-		let mut oracle_bytes32 = vec![0u8; 32]; // No oracle for this output
+		let oracle_bytes32 = vec![0u8; 32]; // No oracle for this output
 
 		let mut settler_bytes32 = vec![0u8; 32];
 		let settler_hex = self.config.output_settler_address.trim_start_matches("0x");
@@ -1174,20 +1116,7 @@ impl OrderPlugin for Eip7683OrderPlugin {
 			order.local_oracle
 		);
 
-		// Log the order details for debugging
-		info!("Creating finaliseSelf transaction with order details:");
-		info!("  user: {}", order.user);
-		info!("  nonce: {}", order.nonce);
-		info!("  origin_chain_id: {}", order.origin_chain_id);
-		info!("  expires_at: {}", order.expires_at);
-		info!("  fill_deadline: {}", order.fill_deadline);
-		info!("  local_oracle: {}", order.local_oracle);
-		info!("  inputs count: {}", order.inputs.len());
-		info!("  outputs count: {}", order.mandate_outputs.len());
-
 		// Encode the order struct
-		// IMPORTANT: For onchain orders created with open(), the expires value in MandateERC7683
-		// is set to the same value as fillDeadline (as seen in send_intent.sh)
 		let order_struct = Token::Tuple(vec![
 			Token::Address(ethers::types::H160::from_str(&order.user).unwrap()),
 			Token::Uint(ethers::types::U256::from(order.nonce)),
@@ -1329,7 +1258,7 @@ impl OrderPlugin for Eip7683OrderPlugin {
 			.config
 			.input_settler_addresses
 			.iter()
-			.find(|addr| {
+			.find(|_addr| {
 				// In a real implementation, we'd have a mapping of chain_id -> address
 				// For now, just use the first one
 				true

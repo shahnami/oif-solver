@@ -54,10 +54,7 @@ pub struct EvmEthersConfig {
 
 #[derive(Debug, Clone)]
 struct PendingTransaction {
-	pub request: DeliveryRequest,
 	pub submitted_at: Timestamp,
-	pub last_check: Timestamp,
-	pub retry_count: u32,
 	pub status: DeliveryStatus,
 	pub nonce: Option<U256>,
 }
@@ -823,10 +820,7 @@ impl DeliveryPlugin for EvmEthersDeliveryPlugin {
 
 		// Track pending transaction
 		let pending = PendingTransaction {
-			request: request.clone(),
 			submitted_at: now,
-			last_check: now,
-			retry_count: 0,
 			status: DeliveryStatus::Submitted,
 			nonce,
 		};
@@ -999,10 +993,7 @@ impl DeliveryPlugin for EvmEthersDeliveryPlugin {
 			.as_secs();
 
 		let pending = PendingTransaction {
-			request: new_request.clone(),
 			submitted_at: now,
-			last_check: now,
-			retry_count: 0,
 			status: DeliveryStatus::Submitted,
 			nonce: Some(original_nonce),
 		};

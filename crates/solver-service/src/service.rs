@@ -17,10 +17,6 @@ impl SolverService {
 		}
 	}
 
-	pub fn orchestrator(&self) -> &Arc<Orchestrator> {
-		&self.orchestrator
-	}
-
 	pub fn config(&self) -> &SolverConfig {
 		&self.config
 	}

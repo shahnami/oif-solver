@@ -1,75 +1,50 @@
 // solver-settlement/src/lib.rs
 
 use solver_types::configs::SettlementConfig;
+use solver_types::events::{Event, SettlementReadyEvent};
 use solver_types::plugins::{
-	FillData, PluginError, PluginHealth, PluginResult, SettlementPlugin, SettlementPriority,
-	SettlementResult, SettlementStatus, SettlementTransaction, SettlementType,
+	AttestationStatus, ClaimWindow, DisputeData, DisputeResolution, EventSink, FillData,
+	PluginError, PluginResult, SettlementPlugin, SettlementReadiness,
 };
-use solver_types::{ChainId, FillEvent, PluginConfig, TxHash};
+use solver_types::{FillEvent, FillStatus, PluginConfig};
 use std::collections::HashMap;
 use std::sync::Arc;
+use std::time::Duration;
 use tokio::sync::RwLock;
-use tracing::{debug, error, info};
+use tokio::time::interval;
+use tracing::{debug, error, info, warn};
 
-type SettlementPluginMap = HashMap<String, Arc<dyn SettlementPlugin>>;
-type SettlementPluginsType = Arc<RwLock<SettlementPluginMap>>;
-
-/// Settlement request containing fill data and strategy preferences
+/// Monitored fill awaiting settlement
 #[derive(Debug, Clone)]
-pub struct SettlementRequest {
+pub struct MonitoredFill {
 	pub fill_event: FillEvent,
 	pub fill_data: FillData,
-	pub preferred_strategy: Option<String>,
-	pub priority: SettlementPriority,
-	pub order_type: String, // e.g., "eip7683_onchain"
-	pub settlement_transaction: Option<SettlementTransaction>, // From order processor
-}
-
-/// Settlement response with transaction details
-#[derive(Debug, Clone)]
-pub struct SettlementResponse {
-	pub settlement_id: String,
-	pub tx_hash: TxHash,
-	pub chain_id: ChainId,
-	pub settlement_type: SettlementType,
-	pub status: SettlementStatus,
-	pub estimated_reward: u64,
-	pub estimated_cost: u64,
-	pub plugin_used: String,
-}
-
-/// Tracking settlement attempts
-#[derive(Debug, Clone)]
-pub struct SettlementTracker {
-	pub request: SettlementRequest,
-	pub attempts: Vec<SettlementAttempt>,
-	pub started_at: u64,
-	pub status: SettlementTrackingStatus,
-}
-
-#[derive(Debug, Clone)]
-pub struct SettlementAttempt {
+	pub order_type: String,
 	pub plugin_name: String,
-	pub started_at: u64,
-	pub settlement_tx: Option<SettlementTransaction>,
-	pub result: Option<SettlementResult>,
-	pub error: Option<String>,
+	pub last_check: u64,
+	pub attestation_status: Option<AttestationStatus>,
+	pub claim_window: Option<ClaimWindow>,
+	pub readiness: Option<SettlementReadiness>,
 }
 
+/// Dispute tracking
 #[derive(Debug, Clone)]
-pub enum SettlementTrackingStatus {
-	Evaluating, // Checking profitability
-	InProgress, // Settlement submitted
-	Monitoring, // Monitoring confirmation
-	Completed(SettlementResult),
-	Failed(String),
+pub struct DisputeTracker {
+	pub fill_event: FillEvent,
+	pub dispute_data: DisputeData,
+	pub plugin_name: String,
+	pub resolution: Option<DisputeResolution>,
+	pub created_at: u64,
 }
 
-/// Settlement service that orchestrates multiple settlement plugins
+/// Settlement orchestration service that monitors fills and emits settlement ready events
 pub struct SettlementService {
-	settlement_plugins: SettlementPluginsType,
+	settlement_plugins: Arc<RwLock<HashMap<String, Arc<dyn SettlementPlugin>>>>,
 	config: SettlementConfig,
-	active_settlements: Arc<RwLock<HashMap<String, SettlementTracker>>>,
+	monitored_fills: Arc<RwLock<HashMap<String, MonitoredFill>>>,
+	active_disputes: Arc<RwLock<HashMap<String, DisputeTracker>>>,
+	event_sink: Option<EventSink<Event>>,
+	shutdown: Arc<RwLock<bool>>,
 }
 
 impl Default for SettlementService {
@@ -81,7 +56,10 @@ impl Default for SettlementService {
 				fallback_strategies: vec![],
 				profit_threshold_wei: "0".to_string(),
 			},
-			active_settlements: Arc::new(RwLock::new(HashMap::new())),
+			monitored_fills: Arc::new(RwLock::new(HashMap::new())),
+			active_disputes: Arc::new(RwLock::new(HashMap::new())),
+			event_sink: None,
+			shutdown: Arc::new(RwLock::new(false)),
 		}
 	}
 }
@@ -95,162 +73,307 @@ impl SettlementService {
 		Self {
 			settlement_plugins: Arc::new(RwLock::new(HashMap::new())),
 			config,
-			active_settlements: Arc::new(RwLock::new(HashMap::new())),
+			monitored_fills: Arc::new(RwLock::new(HashMap::new())),
+			active_disputes: Arc::new(RwLock::new(HashMap::new())),
+			event_sink: None,
+			shutdown: Arc::new(RwLock::new(false)),
 		}
 	}
 
-	/// Main settle function - orchestrates plugin selection and execution
-	pub async fn settle(&self, request: SettlementRequest) -> PluginResult<SettlementResponse> {
+	/// Set the event sink for emitting settlement ready events
+	pub fn set_event_sink(&mut self, sink: EventSink<Event>) {
+		self.event_sink = Some(sink);
+	}
+
+	/// Monitor a fill event for settlement conditions
+	pub async fn monitor_fill(&self, fill_event: FillEvent) -> PluginResult<()> {
 		info!(
-			"Processing settlement request for order {} (fill: {})",
-			request.fill_event.order_id, request.fill_event.fill_id
+			"Starting to monitor fill {} for order {}",
+			fill_event.fill_id, fill_event.order_id
 		);
+
+		// Only monitor confirmed fills
+		if fill_event.status != FillStatus::Confirmed {
+			return Ok(());
+		}
+
+		// Extract order type from source
+		let order_type = fill_event.source.clone();
+
+		// Create fill data from the event
+		let fill_data = FillData {
+			order_id: fill_event.order_id.clone(),
+			fill_tx_hash: fill_event.tx_hash.clone(),
+			fill_timestamp: fill_event.timestamp,
+			chain_id: fill_event.chain_id,
+			order_data: fill_event.order_data.clone(),
+		};
 
 		// Select appropriate plugin
-		let plugin_name = self.select_plugin(&request).await?;
-		let plugins = self.settlement_plugins.read().await;
-		let plugin = plugins.get(&plugin_name).ok_or_else(|| {
-			PluginError::NotFound(format!("Settlement plugin '{}' not found", plugin_name))
-		})?;
+		let plugin_name = self
+			.select_plugin_for_fill(&fill_event, &order_type)
+			.await?;
 
-		// Validate the fill
-		let validation = plugin.validate_fill(&request.fill_data).await?;
-		if !validation.is_valid {
-			return Err(PluginError::ExecutionFailed(format!(
-				"Fill validation failed: {:?}",
-				validation.errors
-			)));
-		}
-
-		// Check profitability
-		let profit_threshold = self.config.profit_threshold_wei.parse::<i64>().unwrap_or(0);
-		let estimate = plugin.estimate_settlement(&request.fill_data).await?;
-
-		if estimate.net_profit < profit_threshold {
-			return Err(PluginError::ExecutionFailed(format!(
-				"Settlement not profitable: expected profit {} < threshold {}",
-				estimate.net_profit, profit_threshold
-			)));
-		}
-
-		// Use provided settlement transaction or prepare one
-		let settlement_tx = if let Some(tx) = request.settlement_transaction.clone() {
-			// Use the transaction from the order processor
-			tx
-		} else {
-			// Prepare settlement transaction using plugin
-			plugin.prepare_settlement(&request.fill_data).await?
+		// Create monitored fill entry
+		let monitored_fill = MonitoredFill {
+			fill_event: fill_event.clone(),
+			fill_data,
+			order_type,
+			plugin_name,
+			last_check: chrono::Utc::now().timestamp() as u64,
+			attestation_status: None,
+			claim_window: None,
+			readiness: None,
 		};
 
-		// Create settlement ID
-		let settlement_id = format!(
-			"{}:{}:{}",
-			request.fill_event.order_id,
-			request.fill_event.fill_id,
-			chrono::Utc::now().timestamp()
-		);
-
-		// Track the settlement
-		let mut tracker = SettlementTracker {
-			request: request.clone(),
-			attempts: vec![],
-			started_at: chrono::Utc::now().timestamp() as u64,
-			status: SettlementTrackingStatus::InProgress,
-		};
-
-		// Execute settlement
-		let result = plugin.execute_settlement(settlement_tx.clone()).await?;
-
-		tracker.attempts.push(SettlementAttempt {
-			plugin_name: plugin_name.clone(),
-			started_at: chrono::Utc::now().timestamp() as u64,
-			settlement_tx: Some(settlement_tx.clone()),
-			result: Some(result.clone()),
-			error: None,
-		});
-
-		// Store active settlement for monitoring
-		self.active_settlements
+		self.monitored_fills
 			.write()
 			.await
-			.insert(settlement_id.clone(), tracker);
+			.insert(fill_event.fill_id.clone(), monitored_fill);
 
-		// Create response
-		let response = SettlementResponse {
-			settlement_id: settlement_id.clone(),
-			tx_hash: result.settlement_tx_hash.clone(),
-			chain_id: request.fill_event.chain_id,
-			settlement_type: settlement_tx.settlement_type,
-			status: result.status,
-			estimated_reward: estimate.estimated_reward,
-			estimated_cost: estimate.estimated_cost,
-			plugin_used: plugin_name,
-		};
-
-		info!(
-			"Settlement {} submitted with tx hash: {}",
-			settlement_id, response.tx_hash
-		);
-
-		Ok(response)
+		Ok(())
 	}
 
-	/// Monitor an active settlement
-	pub async fn monitor_settlement(&self, settlement_id: &str) -> PluginResult<SettlementResult> {
-		let active = self.active_settlements.read().await;
-		let tracker = active.get(settlement_id).ok_or_else(|| {
-			PluginError::NotFound(format!("Settlement '{}' not found", settlement_id))
-		})?;
+	/// Start the monitoring loop
+	pub async fn start_monitoring(&self) {
+		info!("Starting settlement monitoring loop");
+		let service = self.clone();
 
-		// Get the plugin that was used
-		let last_attempt = tracker.attempts.last().ok_or_else(|| {
-			PluginError::ExecutionFailed("No settlement attempts found".to_string())
-		})?;
+		tokio::spawn(async move {
+			let mut ticker = interval(Duration::from_secs(10)); // Check every 10 seconds
+
+			loop {
+				ticker.tick().await;
+
+				// Check shutdown flag
+				if *service.shutdown.read().await {
+					info!("Settlement monitoring loop shutting down");
+					break;
+				}
+
+				if let Err(e) = service.check_monitored_fills().await {
+					error!("Error checking monitored fills: {}", e);
+				}
+			}
+		});
+	}
+
+	/// Check all monitored fills for settlement readiness
+	async fn check_monitored_fills(&self) -> PluginResult<()> {
+		let fills = self.monitored_fills.read().await.clone();
+
+		if !fills.is_empty() {
+			debug!("Checking {} monitored fills", fills.len());
+		}
+
+		for (fill_id, mut monitored_fill) in fills {
+			if let Err(e) = self.check_single_fill(&fill_id, &mut monitored_fill).await {
+				warn!("Error checking fill {}: {}", fill_id, e);
+			}
+		}
+
+		Ok(())
+	}
+
+	/// Check a single fill for settlement readiness
+	async fn check_single_fill(
+		&self,
+		fill_id: &str,
+		monitored_fill: &mut MonitoredFill,
+	) -> PluginResult<()> {
+		// Check if this fill has expired (24 hours since last check)
+		let now = chrono::Utc::now().timestamp() as u64;
+		if now - monitored_fill.last_check > 86400 {
+			info!(
+				"Fill {} has expired after 24 hours, removing from monitoring",
+				fill_id
+			);
+			self.monitored_fills.write().await.remove(fill_id);
+			return Ok(());
+		}
 
 		let plugins = self.settlement_plugins.read().await;
-		let plugin = plugins.get(&last_attempt.plugin_name).ok_or_else(|| {
+		let plugin = plugins.get(&monitored_fill.plugin_name).ok_or_else(|| {
 			PluginError::NotFound(format!(
 				"Settlement plugin '{}' not found",
-				last_attempt.plugin_name
+				monitored_fill.plugin_name
 			))
 		})?;
 
-		// Monitor the settlement
-		let tx_hash = &last_attempt
-			.result
-			.as_ref()
-			.ok_or_else(|| PluginError::ExecutionFailed("No result found".to_string()))?
-			.settlement_tx_hash;
+		// Verify settlement conditions (this will check attestation and claim window internally)
+		let readiness = plugin
+			.verify_settlement_conditions(&monitored_fill.fill_data)
+			.await?;
 
-		plugin.monitor_settlement(tx_hash).await
-	}
+		// Extract attestation status and claim window from readiness
+		monitored_fill.attestation_status = Some(readiness.oracle_status.clone());
+		monitored_fill.claim_window = Some(readiness.claim_window.clone());
+		monitored_fill.readiness = Some(readiness.clone());
 
-	/// Select the best plugin for a settlement request
-	async fn select_plugin(&self, request: &SettlementRequest) -> PluginResult<String> {
-		// Use preferred strategy if specified
-		if let Some(preferred) = &request.preferred_strategy {
-			let plugins = self.settlement_plugins.read().await;
-			if plugins.contains_key(preferred) {
-				// Verify plugin can handle this chain
-				let plugin = plugins.get(preferred).unwrap();
-				if plugin
-					.can_settle(request.fill_event.chain_id, &request.order_type)
-					.await?
-				{
-					return Ok(preferred.clone());
+		// Update last check time
+		monitored_fill.last_check = chrono::Utc::now().timestamp() as u64;
+
+		// Check if this fill is newly disputed
+		let is_newly_disputed = readiness.oracle_status.is_disputed
+			&& monitored_fill
+				.attestation_status
+				.as_ref()
+				.map(|s| !s.is_disputed)
+				.unwrap_or(true);
+
+		// Handle dispute if newly detected
+		if is_newly_disputed {
+			info!("Dispute detected for fill {}", fill_id);
+
+			// Create dispute data from oracle information
+			let dispute_data = DisputeData {
+				disputer: readiness
+					.oracle_status
+					.oracle_address
+					.clone()
+					.unwrap_or_else(|| "unknown".to_string()),
+				dispute_reason: "Oracle reported dispute".to_string(),
+				dispute_time: chrono::Utc::now().timestamp() as u64,
+				evidence: None,
+			};
+
+			// Handle the dispute
+			match self.handle_dispute(fill_id, dispute_data).await {
+				Ok(resolution) => {
+					info!("Dispute handled for fill {}: {:?}", fill_id, resolution);
+				}
+				Err(e) => {
+					error!("Failed to handle dispute for fill {}: {}", fill_id, e);
 				}
 			}
 		}
 
-		// Otherwise use default strategy
+		// If ready, emit settlement ready event
+		if readiness.is_ready {
+			info!("Fill {} is ready for settlement", fill_id);
+			self.emit_settlement_ready_event(monitored_fill).await?;
+
+			// Remove from monitoring
+			self.monitored_fills.write().await.remove(fill_id);
+		} else {
+			debug!(
+				"Fill {} not ready for settlement: {:?}",
+				fill_id, readiness.reasons
+			);
+			debug!(
+				"Attestation status: is_attested={}, is_disputed={}, attestation_time={:?}",
+				readiness.oracle_status.is_attested,
+				readiness.oracle_status.is_disputed,
+				readiness.oracle_status.attestation_time
+			);
+			debug!(
+				"Claim window: start={}, end={}, is_active={}",
+				readiness.claim_window.start,
+				readiness.claim_window.end,
+				readiness.claim_window.is_active
+			);
+
+			// Update the monitored fill
+			self.monitored_fills
+				.write()
+				.await
+				.insert(fill_id.to_string(), monitored_fill.clone());
+		}
+
+		Ok(())
+	}
+
+	/// Emit a settlement ready event
+	async fn emit_settlement_ready_event(
+		&self,
+		monitored_fill: &MonitoredFill,
+	) -> PluginResult<()> {
+		let event = SettlementReadyEvent {
+			fill_event: monitored_fill.fill_event.clone(),
+			oracle_attestation_id: monitored_fill
+				.attestation_status
+				.as_ref()
+				.and_then(|s| s.attestation_id.clone()),
+			claim_window_start: monitored_fill
+				.claim_window
+				.as_ref()
+				.map(|w| w.start)
+				.unwrap_or(0),
+			claim_window_end: monitored_fill
+				.claim_window
+				.as_ref()
+				.map(|w| w.end)
+				.unwrap_or(0),
+		};
+
+		// Emit event
+		if let Some(sink) = &self.event_sink {
+			sink.send(Event::SettlementReady(event)).map_err(|e| {
+				PluginError::ExecutionFailed(format!("Failed to emit event: {}", e))
+			})?;
+			info!(
+				"Emitted SettlementReadyEvent for fill {}",
+				monitored_fill.fill_event.fill_id
+			);
+		} else {
+			warn!("No event sink configured, cannot emit SettlementReadyEvent");
+		}
+
+		Ok(())
+	}
+
+	/// Handle a dispute for a monitored fill
+	pub async fn handle_dispute(
+		&self,
+		fill_id: &str,
+		dispute_data: DisputeData,
+	) -> PluginResult<DisputeResolution> {
+		let fills = self.monitored_fills.read().await;
+		let monitored_fill = fills.get(fill_id).ok_or_else(|| {
+			PluginError::NotFound(format!("Fill '{}' not found in monitoring", fill_id))
+		})?;
+
+		let plugins = self.settlement_plugins.read().await;
+		let plugin = plugins.get(&monitored_fill.plugin_name).ok_or_else(|| {
+			PluginError::NotFound(format!(
+				"Settlement plugin '{}' not found",
+				monitored_fill.plugin_name
+			))
+		})?;
+
+		// Handle dispute through plugin
+		let resolution = plugin
+			.handle_dispute(&monitored_fill.fill_data, &dispute_data)
+			.await?;
+
+		// Track dispute
+		let dispute_tracker = DisputeTracker {
+			fill_event: monitored_fill.fill_event.clone(),
+			dispute_data,
+			plugin_name: monitored_fill.plugin_name.clone(),
+			resolution: Some(resolution.clone()),
+			created_at: chrono::Utc::now().timestamp() as u64,
+		};
+
+		self.active_disputes
+			.write()
+			.await
+			.insert(fill_id.to_string(), dispute_tracker);
+
+		Ok(resolution)
+	}
+
+	/// Select the best plugin for a fill
+	async fn select_plugin_for_fill(
+		&self,
+		fill_event: &FillEvent,
+		order_type: &str,
+	) -> PluginResult<String> {
 		let plugins = self.settlement_plugins.read().await;
 
 		// Try default strategy first
 		if let Some(plugin) = plugins.get(&self.config.default_strategy) {
-			if plugin
-				.can_settle(request.fill_event.chain_id, &request.order_type)
-				.await?
-			{
+			if plugin.can_handle(fill_event.chain_id, order_type).await? {
 				return Ok(self.config.default_strategy.clone());
 			}
 		}
@@ -258,18 +381,15 @@ impl SettlementService {
 		// Try fallback strategies
 		for strategy in &self.config.fallback_strategies {
 			if let Some(plugin) = plugins.get(strategy) {
-				if plugin
-					.can_settle(request.fill_event.chain_id, &request.order_type)
-					.await?
-				{
+				if plugin.can_handle(fill_event.chain_id, order_type).await? {
 					return Ok(strategy.clone());
 				}
 			}
 		}
 
 		Err(PluginError::NotFound(format!(
-			"No settlement plugin available for chain {}",
-			request.fill_event.chain_id
+			"No settlement plugin available for chain {} and order type {}",
+			fill_event.chain_id, order_type
 		)))
 	}
 
@@ -279,55 +399,10 @@ impl SettlementService {
 		self.settlement_plugins.write().await.insert(name, plugin);
 	}
 
-	/// Health check all settlement plugins
-	pub async fn health_check(&self) -> PluginResult<HashMap<String, PluginHealth>> {
-		let all_plugins = self.settlement_plugins.read().await;
-		let mut health_status = HashMap::new();
-
-		for (plugin_name, plugin) in all_plugins.iter() {
-			match plugin.health_check().await {
-				Ok(health) => {
-					health_status.insert(plugin_name.clone(), health);
-				}
-				Err(error) => {
-					health_status.insert(
-						plugin_name.clone(),
-						PluginHealth::unhealthy(format!("Health check failed: {}", error)),
-					);
-				}
-			}
-		}
-
-		Ok(health_status)
-	}
-
-	/// Get active settlements
-	pub async fn get_active_settlements(&self) -> Vec<String> {
-		self.active_settlements
-			.read()
-			.await
-			.keys()
-			.cloned()
-			.collect()
-	}
-
-	/// Clean up completed settlements
-	pub async fn cleanup_completed_settlements(&self) {
-		let mut active = self.active_settlements.write().await;
-		let completed: Vec<String> = active
-			.iter()
-			.filter_map(|(id, tracker)| match &tracker.status {
-				SettlementTrackingStatus::Completed(_) | SettlementTrackingStatus::Failed(_) => {
-					Some(id.clone())
-				}
-				_ => None,
-			})
-			.collect();
-
-		for id in completed {
-			debug!("Removing completed settlement: {}", id);
-			active.remove(&id);
-		}
+	/// Stop monitoring
+	pub async fn stop_monitoring(&self) {
+		info!("Stopping settlement monitoring");
+		*self.shutdown.write().await = true;
 	}
 }
 
@@ -335,6 +410,7 @@ impl SettlementService {
 pub struct SettlementServiceBuilder {
 	plugins: Vec<(String, Box<dyn SettlementPlugin>, PluginConfig)>,
 	config: SettlementConfig,
+	event_sink: Option<EventSink<Event>>,
 }
 
 impl SettlementServiceBuilder {
@@ -346,7 +422,13 @@ impl SettlementServiceBuilder {
 				fallback_strategies: vec![],
 				profit_threshold_wei: "0".to_string(),
 			},
+			event_sink: None,
 		}
+	}
+
+	pub fn with_event_sink(mut self, event_sink: EventSink<Event>) -> Self {
+		self.event_sink = Some(event_sink);
+		self
 	}
 
 	pub fn with_plugin(
@@ -365,7 +447,12 @@ impl SettlementServiceBuilder {
 	}
 
 	pub async fn build(self) -> SettlementService {
-		let service = SettlementService::with_config(self.config);
+		let mut service = SettlementService::with_config(self.config);
+
+		// Set event sink if provided
+		if let Some(event_sink) = self.event_sink {
+			service.set_event_sink(event_sink);
+		}
 
 		// Initialize and register all plugins
 		for (name, mut plugin, plugin_config) in self.plugins {
@@ -389,5 +476,18 @@ impl SettlementServiceBuilder {
 impl Default for SettlementServiceBuilder {
 	fn default() -> Self {
 		Self::new()
+	}
+}
+
+impl Clone for SettlementService {
+	fn clone(&self) -> Self {
+		Self {
+			settlement_plugins: self.settlement_plugins.clone(),
+			config: self.config.clone(),
+			monitored_fills: self.monitored_fills.clone(),
+			active_disputes: self.active_disputes.clone(),
+			event_sink: self.event_sink.clone(),
+			shutdown: self.shutdown.clone(),
+		}
 	}
 }

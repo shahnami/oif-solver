@@ -113,14 +113,7 @@ profit_threshold_wei = "1000000000000000" # 0.001 ETH
 
 # Discovery configuration
 [discovery]
-historical_sync = false
-realtime_monitoring = true
-dedupe_events = true
-max_event_age_seconds = 3600 # 1 hour
 # Additional configurable fields (with defaults if not specified)
-max_events_per_second = 1000
-event_buffer_size = 10000
-deduplication_window_seconds = 300
 max_concurrent_sources = 10
 
 # State configuration

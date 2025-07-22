@@ -15,16 +15,12 @@ pub struct FillData {
 	pub order_id: String,
 	pub fill_tx_hash: TxHash,
 	pub fill_timestamp: Timestamp,
-	pub filler_address: Address,
-	pub fill_amount: u64,
 	pub chain_id: ChainId,
-	pub block_number: u64,
-	pub gas_used: u64,
-	pub effective_gas_price: u64,
+	pub order_data: Option<Bytes>, // Raw order data that may contain filler address
 }
 
 /// Settlement transaction that claims rewards or processes settlement
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct SettlementTransaction {
 	pub transaction: Transaction,
 	pub settlement_type: SettlementType,
@@ -52,23 +48,12 @@ pub enum SettlementType {
 	Custom(String), // Custom settlement mechanism
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct SettlementMetadata {
 	pub order_id: String,
 	pub strategy: String,
 	pub expected_confirmations: u32,
 	pub custom_fields: HashMap<String, String>,
-}
-
-/// Settlement result after execution
-#[derive(Debug, Clone)]
-pub struct SettlementResult {
-	pub settlement_tx_hash: TxHash,
-	pub status: SettlementStatus,
-	pub timestamp: Timestamp,
-	pub actual_reward: u64,
-	pub gas_used: u64,
-	pub confirmation_data: Option<ConfirmationData>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
@@ -81,49 +66,12 @@ pub enum SettlementStatus {
 	Cancelled,
 }
 
-#[derive(Debug, Clone)]
-pub struct ConfirmationData {
-	pub block_number: u64,
-	pub block_hash: String,
-	pub confirmation_count: u32,
-	pub proof_data: Option<Bytes>,
-}
-
-/// Settlement strategy configuration
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct SettlementStrategy {
-	pub strategy_type: SettlementType,
-	pub priority: SettlementPriority,
-	pub conditions: SettlementConditions,
-	pub retry_config: RetryConfig,
-}
-
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub enum SettlementPriority {
 	Immediate,            // Settle as soon as possible
 	Batched,              // Wait for batch settlement
 	Optimized,            // Wait for optimal gas conditions
 	Scheduled(Timestamp), // Settle at specific time
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct SettlementConditions {
-	pub min_confirmations: u32,
-	pub max_gas_price: Option<u64>,
-	pub min_reward: Option<u64>,
-	pub timeout: Option<u64>, // seconds
-}
-
-/// Settlement estimation
-#[derive(Debug, Clone)]
-pub struct SettlementEstimate {
-	pub estimated_gas: u64,
-	pub estimated_cost: u64,
-	pub estimated_reward: u64,
-	pub net_profit: i64,                           // can be negative
-	pub confidence_score: f64,                     // 0.0 to 1.0
-	pub estimated_time_to_settlement: Option<u64>, // seconds
-	pub risks: Vec<SettlementRisk>,
 }
 
 #[derive(Debug, Clone)]
@@ -142,57 +90,96 @@ pub enum RiskSeverity {
 	Critical,
 }
 
-/// Plugin interface for settlement strategies
+/// Plugin interface for settlement orchestration
 #[async_trait]
 pub trait SettlementPlugin: BasePlugin {
 	/// Check if this plugin can handle settlement for the given chain and order type
-	async fn can_settle(&self, chain_id: ChainId, order_type: &str) -> PluginResult<bool>;
+	async fn can_handle(&self, chain_id: ChainId, order_type: &str) -> PluginResult<bool>;
 
-	/// Prepare settlement transaction for a fill
-	async fn prepare_settlement(&self, fill: &FillData) -> PluginResult<SettlementTransaction>;
+	/// Check oracle attestation status for a fill
+	async fn check_oracle_attestation(&self, fill: &FillData) -> PluginResult<AttestationStatus>;
 
-	/// Execute settlement transaction
-	async fn execute_settlement(
+	/// Get claim window for this order type
+	async fn get_claim_window(
 		&self,
-		settlement: SettlementTransaction,
-	) -> PluginResult<SettlementResult>;
+		order_type: &str,
+		fill: &FillData,
+	) -> PluginResult<ClaimWindow>;
 
-	/// Monitor settlement status
-	async fn monitor_settlement(&self, tx_hash: &TxHash) -> PluginResult<SettlementResult>;
+	/// Verify all settlement conditions are met
+	async fn verify_settlement_conditions(
+		&self,
+		fill: &FillData,
+	) -> PluginResult<SettlementReadiness>;
 
-	/// Estimate settlement costs and rewards
-	async fn estimate_settlement(&self, fill: &FillData) -> PluginResult<SettlementEstimate>;
-
-	/// Validate that a fill can be settled
-	async fn validate_fill(&self, fill: &FillData) -> PluginResult<FillValidation>;
+	/// Handle dispute or challenge if applicable
+	async fn handle_dispute(
+		&self,
+		fill: &FillData,
+		dispute_data: &DisputeData,
+	) -> PluginResult<DisputeResolution>;
 
 	/// Get settlement requirements for this strategy
 	fn get_settlement_requirements(&self) -> SettlementRequirements;
 
-	/// Check if settlement is profitable
-	async fn is_profitable(&self, fill: &FillData) -> PluginResult<bool>;
-
 	/// Get supported settlement types
 	fn supported_settlement_types(&self) -> Vec<SettlementType>;
-
-	/// Cancel a pending settlement if possible
-	async fn cancel_settlement(&self, tx_hash: &TxHash) -> PluginResult<bool>;
 }
 
-/// Fill validation result
+/// Oracle attestation status
 #[derive(Debug, Clone)]
-pub struct FillValidation {
-	pub is_valid: bool,
-	pub errors: Vec<String>,
-	pub warnings: Vec<String>,
-	pub required_proofs: Vec<ProofRequirement>,
+pub struct AttestationStatus {
+	pub is_attested: bool,
+	pub attestation_id: Option<String>,
+	pub oracle_address: Option<Address>,
+	pub attestation_time: Option<Timestamp>,
+	pub dispute_period_end: Option<Timestamp>,
+	pub is_disputed: bool,
+}
+
+/// Claim window information
+#[derive(Debug, Clone)]
+pub struct ClaimWindow {
+	pub start: Timestamp,
+	pub end: Timestamp,
+	pub is_active: bool,
+	pub remaining_time: Option<u64>, // seconds
+}
+
+/// Settlement readiness status
+#[derive(Debug, Clone)]
+pub struct SettlementReadiness {
+	pub is_ready: bool,
+	pub reasons: Vec<String>,
+	pub oracle_status: AttestationStatus,
+	pub claim_window: ClaimWindow,
+	pub estimated_profit: i64,
+	pub risks: Vec<SettlementRisk>,
+}
+
+/// Dispute data
+#[derive(Debug, Clone)]
+pub struct DisputeData {
+	pub disputer: Address,
+	pub dispute_reason: String,
+	pub dispute_time: Timestamp,
+	pub evidence: Option<Bytes>,
+}
+
+/// Dispute resolution
+#[derive(Debug, Clone)]
+pub struct DisputeResolution {
+	pub resolution_type: DisputeResolutionType,
+	pub outcome: String,
+	pub refund_amount: Option<u64>,
 }
 
 #[derive(Debug, Clone)]
-pub struct ProofRequirement {
-	pub proof_type: String,
-	pub description: String,
-	pub deadline: Option<Timestamp>,
+pub enum DisputeResolutionType {
+	Accepted,
+	Rejected,
+	Pending,
+	Escalated,
 }
 
 /// Settlement requirements for a strategy

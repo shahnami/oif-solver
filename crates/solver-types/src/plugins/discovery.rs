@@ -88,32 +88,6 @@ impl EventSink<crate::Event> {
 	}
 }
 
-/// Discovery configuration for monitoring
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct DiscoveryConfig {
-	pub start_block: Option<u64>,
-	pub end_block: Option<u64>,
-	pub poll_interval_ms: u64,
-	pub batch_size: u32,
-	pub max_retry_attempts: u32,
-	pub timeout_ms: u64,
-	pub filters: Vec<EventFilter>,
-}
-
-impl Default for DiscoveryConfig {
-	fn default() -> Self {
-		Self {
-			start_block: None,
-			end_block: None,
-			poll_interval_ms: 2000, // 2 seconds
-			batch_size: 100,
-			max_retry_attempts: 3,
-			timeout_ms: 30000, // 30 seconds
-			filters: Vec::new(),
-		}
-	}
-}
-
 /// Event filter for targeted discovery
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct EventFilter {

@@ -11,7 +11,7 @@ use solver_plugin::factory::global_plugin_factory;
 use solver_settlement::{SettlementService, SettlementServiceBuilder};
 use solver_state::{StateService, StateServiceBuilder};
 use solver_types::plugins::*;
-use solver_types::{Event, EventType, *};
+use solver_types::{Event, EventType, SettlementReadyEvent, *};
 use std::collections::HashMap;
 use std::sync::Arc;
 use std::time::Duration;
@@ -197,9 +197,8 @@ impl Orchestrator {
 	async fn start_settlement_service(&self) -> Result<(), CoreError> {
 		info!("Starting settlement service");
 
-		// Settlement service doesn't have a specific start method
-		// It's ready to use once created with plugins
-		// TODO: Add health check to verify all configured plugins are ready
+		// Start the settlement monitoring loop
+		self.settlement_service.start_monitoring().await;
 
 		Ok(())
 	}
@@ -245,6 +244,9 @@ impl Orchestrator {
 			Event::Discovery(discovery_event) => self.handle_discovery_event(discovery_event).await,
 			Event::OrderCreated(order_event) => self.handle_order_created_event(order_event).await,
 			Event::OrderFill(fill_event) => self.handle_order_fill_event(fill_event).await,
+			Event::SettlementReady(ready_event) => {
+				self.handle_settlement_ready_event(ready_event).await
+			}
 			Event::Settlement(settlement_event) => {
 				self.handle_settlement_event(settlement_event).await
 			}
@@ -376,8 +378,10 @@ impl Orchestrator {
 				// Remove from pending if it was there
 				self.pending_fills.write().await.remove(&event.fill_id);
 
-				// Process settlement
-				self.process_confirmed_fill(event).await?;
+				// Send to settlement service for monitoring
+				if let Err(e) = self.settlement_service.monitor_fill(event.clone()).await {
+					warn!("Failed to start monitoring fill for settlement: {}", e);
+				}
 			}
 			FillStatus::Failed(_) => {
 				// Remove from pending if it was there
@@ -393,50 +397,47 @@ impl Orchestrator {
 		Ok(())
 	}
 
-	async fn process_confirmed_fill(&self, event: FillEvent) -> Result<(), CoreError> {
+	async fn handle_settlement_ready_event(
+		&self,
+		event: SettlementReadyEvent,
+	) -> Result<(), CoreError> {
 		info!(
-			"Fill confirmed, triggering settlement for order {}",
-			event.order_id
+			"Processing settlement ready event for order {} (fill: {})",
+			event.fill_event.order_id, event.fill_event.fill_id
 		);
 
-		// Process through delivery service order processors to get settlement transaction
+		// Use delivery service to process the fill
 		match self
 			.delivery_service
-			.process_fill_to_transaction(&event)
+			.process_fill_to_transaction(&event.fill_event)
 			.await
 		{
 			Ok(Some(transaction_request)) => {
 				info!(
 					"Creating settlement transaction for order {}",
-					event.order_id
+					event.fill_event.order_id
 				);
-
-				// Submit the settlement transaction through delivery service
+				// Submit the transaction request
 				match self
 					.delivery_service
 					.execute_transaction(transaction_request)
 					.await
 				{
 					Ok(response) => {
-						// Create settlement ID
-						let settlement_id = format!(
-							"{}:{}:{}",
-							event.order_id,
-							event.fill_id,
-							chrono::Utc::now().timestamp()
-						);
-
 						info!(
-							"Settlement {} initiated for order {} with tx hash: {}",
-							settlement_id, event.order_id, response.tx_hash
+							"Settlement transaction submitted for order {} with tx hash: {}",
+							event.fill_event.order_id, response.tx_hash
 						);
 
-						// Create and send Settlement event
+						// Create and send Settlement event to track the execution
 						let settlement_event = SettlementEvent {
-							order_id: event.order_id.clone(),
-							settlement_id,
-							source_chain: event.chain_id,
-							destination_chain: event.chain_id, // TODO: Set to actual destination chain
+							order_id: event.fill_event.order_id.clone(),
+							settlement_id: format!(
+								"{}:{}",
+								event.fill_event.order_id, event.fill_event.fill_id
+							),
+							source_chain: event.fill_event.chain_id,
+							destination_chain: event.fill_event.chain_id,
 							tx_hash: response.tx_hash,
 							timestamp: chrono::Utc::now().timestamp() as u64,
 							status: match response.status {
@@ -455,23 +456,23 @@ impl Orchestrator {
 					}
 					Err(e) => {
 						warn!(
-							"Failed to initiate settlement for order {}: {}",
-							event.order_id, e
+							"Failed to execute settlement transaction for order {}: {}",
+							event.fill_event.order_id, e
 						);
 					}
 				}
 			}
 			Ok(None) => {
-				// No order processor created a settlement transaction
-				info!(
-					"No order processor created settlement transaction for order {}",
-					event.order_id
+				warn!(
+					"No settlement transaction created for order {}",
+					event.fill_event.order_id
 				);
-				// In the new architecture, if no processor handles settlement, we skip it
-				// (settlements are optional and depend on the order type)
 			}
 			Err(e) => {
-				warn!("Failed to process fill event: {}", e);
+				warn!(
+					"Failed to process settlement for order {}: {}",
+					event.fill_event.order_id, e
+				);
 			}
 		}
 
@@ -856,10 +857,11 @@ impl OrchestratorBuilder {
 
 		let delivery_service = Arc::new(delivery_builder.build().await);
 
-		// Create SettlementService
+		// Create SettlementService with event sink
 		// Read values from config with defaults
-		let mut settlement_builder =
-			SettlementServiceBuilder::new().with_config(config_ref.settlement.clone());
+		let mut settlement_builder = SettlementServiceBuilder::new()
+			.with_config(config_ref.settlement.clone())
+			.with_event_sink(EventSink::new(event_tx.clone()));
 
 		// Register settlement plugins from config
 		for (name, plugin_config) in &config_ref.plugins.settlement {

@@ -47,17 +47,9 @@ pub struct SettlementConfig {
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct DiscoveryConfig {
-	// From strategy config
-	pub historical_sync: bool,
 	pub realtime_monitoring: bool,
-	pub dedupe_events: bool,
-	pub max_event_age_seconds: u64,
 	#[serde(default = "default_max_events_per_second")]
 	pub max_events_per_second: u64,
-	#[serde(default = "default_event_buffer_size")]
-	pub event_buffer_size: usize,
-	#[serde(default = "default_deduplication_window_seconds")]
-	pub deduplication_window_seconds: u64,
 	#[serde(default = "default_max_concurrent_sources")]
 	pub max_concurrent_sources: usize,
 }
@@ -73,12 +65,6 @@ pub struct StateConfig {
 // Default values for discovery config
 fn default_max_events_per_second() -> u64 {
 	1000
-}
-fn default_event_buffer_size() -> usize {
-	10000
-}
-fn default_deduplication_window_seconds() -> u64 {
-	300
 }
 fn default_max_concurrent_sources() -> usize {
 	10

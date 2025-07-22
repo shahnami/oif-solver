@@ -1,38 +1,39 @@
-# Solver Settlement - Cross-Chain Settlement Service
+# Solver Settlement - Settlement Orchestration Service
 
-The `solver-settlement` crate provides a plugin-based settlement service that manages the finalization and reward claiming process for filled orders. It orchestrates various settlement strategies, validates fills, checks profitability, and monitors settlement transactions.
+The `solver-settlement` crate provides a plugin-based orchestration service that monitors fills and determines when they are ready for settlement. It manages oracle attestations, claim windows, and settlement conditions, emitting events when settlements can proceed.
 
 ## 🏗️ Architecture Overview
 
 ```text
 ┌─────────────────────────────────────────────────────────────────────────┐
-│                         SETTLEMENT SERVICE                               │
+│                    SETTLEMENT ORCHESTRATION SERVICE                      │
 │  ┌───────────────────────────────────────────────────────────────────┐  │
 │  │                     Core Components                                │  │
 │  │  ┌─────────────┐  ┌──────────────┐  ┌────────────────────────┐  │  │
-│  │  │  Plugin     │  │  Settlement  │  │    Profitability       │  │  │
-│  │  │  Registry   │  │   Tracker    │  │      Checker           │  │  │
+│  │  │  Plugin     │  │  Monitored   │  │     Event              │  │  │
+│  │  │  Registry   │  │   Fills      │  │     Emitter            │  │  │
 │  │  └─────────────┘  └──────────────┘  └────────────────────────┘  │  │
 │  └───────────────────────────────────────────────────────────────────┘  │
 │                                                                          │
 │  ┌───────────────────────────────────────────────────────────────────┐  │
-│  │                    Settlement Flow                                 │  │
+│  │                    Orchestration Flow                              │  │
 │  │  ┌────────┐  ┌──────────┐  ┌───────────┐  ┌─────────────────┐  │  │
-│  │  │Validate│→ │Estimate  │→ │ Prepare   │→ │    Execute      │  │  │
-│  │  │ Fill   │  │Profit    │  │Transaction│  │  Settlement     │  │  │
+│  │  │Monitor │→ │  Check   │→ │  Verify   │→ │     Emit        │  │  │
+│  │  │ Fill   │  │ Oracle   │  │Conditions │  │ Ready Event     │  │  │
 │  │  └────────┘  └──────────┘  └───────────┘  └─────────────────┘  │  │
 │  └───────────────────────────────────────────────────────────────────┘  │
 └─────────────────────────────────────────────────────────────────────────┘
                                     │
-                     ┌──────────────┴─────────────┐
-                     │                            │
-            ┌────────▼─────────┐       ┌─────────▼─────────┐
-            │ Settlement Plugin│       │ Settlement Plugin │
-            │ (Direct/Native)  │       │ (Cross-Chain)    │
-            └──────────────────┘       └───────────────────┘
-                     │                            │
-                     ▼                            ▼
-            Settlement Contract        Bridge/Relayer Contract
+                                    ▼
+                        ┌───────────────────────┐
+                        │ SettlementReadyEvent  │
+                        └───────────────────────┘
+                                    │
+                                    ▼
+                        ┌───────────────────────┐
+                        │   Delivery Service    │
+                        │ (Executes Settlement) │
+                        └───────────────────────┘
 ```
 
 ## 📁 Module Structure
@@ -49,15 +50,15 @@ solver-settlement/
 
 ### 1. **SettlementService** (`lib.rs`)
 
-The main service that orchestrates settlement plugins and manages the settlement lifecycle.
+The main orchestration service that monitors fills and determines when settlements are ready.
 
 **Key Responsibilities:**
 
-- Plugin registration and selection
-- Fill validation and profitability checking
-- Settlement transaction preparation and execution
-- Settlement status tracking and monitoring
-- Health check management
+- Monitor confirmed fills for settlement readiness
+- Check oracle attestations for fills
+- Verify claim windows and timing constraints
+- Emit events when settlements can proceed
+- Manage settlement plugins
 
 **Internal Structure:**
 
@@ -65,100 +66,150 @@ The main service that orchestrates settlement plugins and manages the settlement
 pub struct SettlementService {
     // Thread-safe plugin registry
     settlement_plugins: Arc<RwLock<HashMap<String, Arc<dyn SettlementPlugin>>>>,
-
+    
     // Configuration
     config: SettlementConfig,
-
-    // Active settlement tracking
-    active_settlements: Arc<RwLock<HashMap<String, SettlementTracker>>>,
+    
+    // Fills being monitored for settlement
+    monitored_fills: Arc<RwLock<HashMap<String, MonitoredFill>>>,
+    
+    // Active disputes tracking
+    active_disputes: Arc<RwLock<HashMap<String, DisputeTracker>>>,
+    
+    // Event sink for emitting settlement ready events
+    event_sink: Option<EventSink<Event>>,
 }
 ```
 
-### 2. **SettlementRequest**
+### 2. **MonitoredFill**
 
-Contains all data needed to process a settlement:
+Tracks fills being monitored for settlement readiness:
 
 ```rust
-pub struct SettlementRequest {
+pub struct MonitoredFill {
     pub fill_event: FillEvent,
     pub fill_data: FillData,
-    pub preferred_strategy: Option<String>,
-    pub priority: SettlementPriority,
     pub order_type: String,
-    pub settlement_transaction: Option<SettlementTransaction>,
+    pub plugin_name: String,
+    pub last_check: u64,
+    pub attestation_status: Option<AttestationStatus>,
+    pub claim_window: Option<ClaimWindow>,
+    pub readiness: Option<SettlementReadiness>,
 }
 ```
 
-### 3. **SettlementTracker**
+### 3. **SettlementReadyEvent**
 
-Tracks the lifecycle and attempts of each settlement:
+Event emitted when a fill is ready for settlement:
 
 ```rust
-pub struct SettlementTracker {
-    pub request: SettlementRequest,
-    pub attempts: Vec<SettlementAttempt>,
-    pub started_at: u64,
-    pub status: SettlementTrackingStatus,
+pub struct SettlementReadyEvent {
+    pub fill_event: FillEvent,
+    pub settlement_type: SettlementType,
+    pub oracle_attestation_id: Option<String>,
+    pub claim_window_start: Timestamp,
+    pub claim_window_end: Timestamp,
+    pub metadata: HashMap<String, String>,
 }
 ```
 
-### 4. **Settlement Status**
+### 4. **Key Data Types**
 
 ```rust
-pub enum SettlementTrackingStatus {
-    Evaluating,  // Checking profitability
-    InProgress,  // Settlement submitted
-    Monitoring,  // Monitoring confirmation
-    Completed(SettlementResult),
-    Failed(String),
+// Oracle attestation status
+pub struct AttestationStatus {
+    pub is_attested: bool,
+    pub attestation_id: Option<String>,
+    pub oracle_address: Option<Address>,
+    pub attestation_time: Option<Timestamp>,
+    pub dispute_period_end: Option<Timestamp>,
+    pub is_disputed: bool,
+}
+
+// Claim window information
+pub struct ClaimWindow {
+    pub start: Timestamp,
+    pub end: Timestamp,
+    pub is_active: bool,
+    pub remaining_time: Option<u64>,
+}
+
+// Settlement readiness check result
+pub struct SettlementReadiness {
+    pub is_ready: bool,
+    pub reasons: Vec<String>,
+    pub oracle_status: AttestationStatus,
+    pub claim_window: ClaimWindow,
+    pub estimated_profit: i64,
+    pub risks: Vec<SettlementRisk>,
 }
 ```
 
-## 🔄 Settlement Flow
+## 🔄 Settlement Orchestration Flow
 
 ```text
-Fill Event → Validation → Profitability Check → Plugin Selection
-                                                        │
-                                                        ▼
-                                              Prepare Transaction
-                                                        │
-                                                        ▼
-                                              Execute Settlement
-                                                        │
-                                                        ▼
-                                              Monitor & Track
-                                                        │
-                                                        ▼
-                                              Update Status
+FillEvent (Confirmed) → Monitor Fill → Check Every 10s
+                              │
+                              ▼
+                    ┌─────────────────────┐
+                    │ Check Conditions:    │
+                    │ • Oracle Attestation │
+                    │ • Dispute Period     │
+                    │ • Claim Window       │
+                    └─────────────────────┘
+                              │
+                          All Ready?
+                              │
+                      ┌───────┴────────┐
+                      │                │
+                     No               Yes
+                      │                │
+                   Continue         Emit Event
+                   Monitoring           │
+                                       ▼
+                              SettlementReadyEvent
+                                       │
+                                       ▼
+                              Delivery Service
+                              Executes Settlement
 ```
 
 ### Flow Steps:
 
-1. **Fill Validation**: Verify the fill is valid and can be settled
-2. **Profitability Check**: Ensure settlement reward exceeds costs + threshold
-3. **Plugin Selection**: Choose appropriate plugin based on strategy and chain
-4. **Transaction Preparation**: Create settlement transaction (or use provided)
-5. **Settlement Execution**: Submit settlement transaction to blockchain
-6. **Monitoring**: Track settlement status until confirmed
-7. **Status Update**: Update tracking status and clean up completed settlements
+1. **Fill Monitoring**: When a fill is confirmed, start monitoring it
+2. **Oracle Check**: Verify oracle has attested to the fill
+3. **Timing Verification**: Check dispute period and claim window
+4. **Condition Assessment**: Verify all settlement conditions are met
+5. **Event Emission**: Emit SettlementReadyEvent when ready
+6. **Remove from Monitoring**: Stop monitoring once event is emitted
 
 ## 🔌 Plugin System
 
-### SettlementPlugin Interface:
+### SettlementPlugin Interface (Refactored):
 
 ```rust
 #[async_trait]
 pub trait SettlementPlugin: BasePlugin {
-    async fn can_settle(&self, chain_id: ChainId, order_type: &str) -> PluginResult<bool>;
-    async fn prepare_settlement(&self, fill: &FillData) -> PluginResult<SettlementTransaction>;
-    async fn execute_settlement(&self, settlement: SettlementTransaction) -> PluginResult<SettlementResult>;
-    async fn monitor_settlement(&self, tx_hash: &TxHash) -> PluginResult<SettlementResult>;
-    async fn estimate_settlement(&self, fill: &FillData) -> PluginResult<SettlementEstimate>;
-    async fn validate_fill(&self, fill: &FillData) -> PluginResult<FillValidation>;
+    // Check if this plugin can handle the given chain and order type
+    async fn can_handle(&self, chain_id: ChainId, order_type: &str) -> PluginResult<bool>;
+    
+    // Check oracle attestation status for a fill
+    async fn check_oracle_attestation(&self, fill: &FillData) -> PluginResult<AttestationStatus>;
+    
+    // Get claim window timing for this order type
+    async fn get_claim_window(&self, order_type: &str, fill: &FillData) -> PluginResult<ClaimWindow>;
+    
+    // Verify all settlement conditions are met
+    async fn verify_settlement_conditions(&self, fill: &FillData) -> PluginResult<SettlementReadiness>;
+    
+    // Handle dispute or challenge if applicable
+    async fn handle_dispute(&self, fill: &FillData, dispute_data: &DisputeData) -> PluginResult<DisputeResolution>;
+    
+    // Get settlement requirements for this strategy
     fn get_settlement_requirements(&self) -> SettlementRequirements;
-    async fn is_profitable(&self, fill: &FillData) -> PluginResult<bool>;
+    
+    // Get supported settlement types
     fn supported_settlement_types(&self) -> Vec<SettlementType>;
-    async fn cancel_settlement(&self, tx_hash: &TxHash) -> PluginResult<bool>;
 }
 ```
 
@@ -175,78 +226,77 @@ pub struct SettlementConfig {
 ## 🚀 Usage Example
 
 ```rust
-use solver_settlement::{SettlementService, SettlementServiceBuilder, SettlementRequest};
+use solver_settlement::{SettlementService, SettlementServiceBuilder};
 use solver_types::configs::SettlementConfig;
+use solver_types::events::{Event, FillEvent};
 
-// Build service with plugins
+// Build service with plugins and event sink
+let (event_tx, mut event_rx) = mpsc::unbounded_channel();
+let event_sink = EventSink::new(event_tx);
+
 let service = SettlementServiceBuilder::new()
     .with_config(SettlementConfig {
         default_strategy: "direct_settlement".to_string(),
-        fallback_strategies: vec!["cross_chain_settlement".to_string()],
-        profit_threshold_wei: "1000000000000000".to_string(), // 0.001 ETH
+        fallback_strategies: vec![],
+        profit_threshold_wei: "0".to_string(),
     })
+    .with_event_sink(event_sink)
     .with_plugin("direct_settlement".to_string(), Box::new(direct_plugin), direct_config)
-    .with_plugin("cross_chain_settlement".to_string(), Box::new(cross_plugin), cross_config)
     .build()
     .await;
 
-// Create settlement request
-let request = SettlementRequest {
-    fill_event: fill_event,
-    fill_data: FillData {
-        order_id: "order123".to_string(),
-        fill_tx_hash: "0x...".to_string(),
-        fill_timestamp: 1234567890,
-        filler_address: "0x...".to_string(),
-        fill_amount: 1000000,
-        chain_id: ChainId::from(1),
-        block_number: 18000000,
-        gas_used: 200000,
-        effective_gas_price: 30000000000,
-    },
-    preferred_strategy: None,
-    priority: SettlementPriority::Normal,
-    order_type: "eip7683_onchain".to_string(),
-    settlement_transaction: None, // Will be prepared by plugin
+// Start monitoring loop
+service.start_monitoring().await;
+
+// When a fill is confirmed, monitor it
+let fill_event = FillEvent {
+    order_id: "order123".to_string(),
+    fill_id: "fill456".to_string(),
+    chain_id: 1,
+    tx_hash: "0x...".to_string(),
+    timestamp: 1234567890,
+    status: FillStatus::Confirmed,
+    source: "eip7683_onchain".to_string(),
+    order_data: Some(order_bytes),
 };
 
-// Execute settlement
-let response = service.settle(request).await?;
-println!("Settlement {} submitted: {}", response.settlement_id, response.tx_hash);
+// Start monitoring the fill
+service.monitor_fill(fill_event).await?;
 
-// Monitor settlement
-let result = service.monitor_settlement(&response.settlement_id).await?;
-println!("Settlement status: {:?}", result.status);
+// The service will automatically check conditions every 10 seconds
+// When ready, it emits a SettlementReadyEvent
 
-// Clean up completed settlements
-service.cleanup_completed_settlements().await;
+// Listen for settlement ready events
+tokio::spawn(async move {
+    while let Some(event) = event_rx.recv().await {
+        match event {
+            Event::SettlementReady(ready_event) => {
+                println!("Settlement ready for fill: {}", ready_event.fill_event.fill_id);
+                // Delivery service will handle the actual settlement execution
+            }
+            _ => {}
+        }
+    }
+});
 ```
 
-## 🔍 Critical Observations
+## 🔍 Key Design Decisions
 
-### Strengths:
+### Architecture Benefits:
 
-1. **Comprehensive Validation**: Validates fills before attempting settlement
-2. **Profitability Checking**: Ensures settlements are economically viable
-3. **Plugin Flexibility**: Supports multiple settlement strategies
-4. **Status Tracking**: Detailed tracking of settlement attempts
-5. **Fallback Support**: Automatic fallback to alternative strategies
+1. **Separation of Concerns**: Settlement orchestration separated from transaction execution
+2. **Event-Driven**: Clean event-based communication between services
+3. **Plugin-Based**: Flexible support for different settlement strategies
+4. **Automatic Monitoring**: Background task monitors all fills continuously
+5. **Stateless Plugins**: Plugins focus on rules/conditions, not state management
 
-### Areas of Concern:
+### Implementation Details:
 
-1. **No Automatic Monitoring**: Requires manual calls to monitor_settlement
-2. **Memory Growth**: Active settlements map grows without automatic cleanup
-3. **Single Attempt**: No retry logic for failed settlements
-4. **String-based Strategy**: Strategy selection uses strings, not enums
-5. **Synchronous Plugin Selection**: Plugin selection blocks during capability checks
-
-### Potential Optimizations:
-
-1. **Background Monitoring**: Add automatic settlement monitoring task
-2. **Automatic Cleanup**: Periodic cleanup of completed settlements
-3. **Retry Logic**: Add configurable retry attempts for failures
-4. **Strategy Enum**: Use enum for strategies instead of strings
-5. **Parallel Capability Check**: Check plugin capabilities in parallel
+1. **10-Second Check Interval**: Configurable monitoring frequency
+2. **Automatic Cleanup**: Fills removed from monitoring after event emission
+3. **Optimized Checks**: Single call to `verify_settlement_conditions` gets all data
+4. **Dispute Handling**: Built-in support for dispute resolution
+5. **Flexible Timing**: Configurable dispute periods and claim windows
 
 ## 🔗 Dependencies
 
@@ -270,51 +320,55 @@ service.cleanup_completed_settlements().await;
 ### Service Lifecycle:
 
 1. **Plugin Registration**: Plugins initialized and registered during build
-2. **Settlement Request**: Receive fill event and settlement request
-3. **Validation**: Validate fill data through selected plugin
-4. **Profitability Check**: Ensure settlement meets profit threshold
-5. **Transaction Preparation**: Use provided or prepare new transaction
-6. **Execution**: Submit settlement transaction
-7. **Tracking**: Store active settlement for monitoring
+2. **Start Monitoring**: Background task begins checking fills every 10 seconds
+3. **Fill Reception**: Confirmed fills added to monitoring queue
+4. **Condition Checking**: Each fill checked for oracle attestation and timing
+5. **Event Emission**: SettlementReadyEvent emitted when conditions met
+6. **Cleanup**: Fill removed from monitoring after event emission
 
-### Plugin Selection Logic:
+### Monitoring Flow:
 
-1. **Preferred Strategy**: Use if specified and available
-2. **Default Strategy**: Fall back to configured default
-3. **Fallback Strategies**: Try each fallback in order
-4. **Chain Support**: Verify plugin supports the target chain
+1. **Oracle Check**: Query plugin for attestation status
+2. **Timing Check**: Verify dispute period and claim window
+3. **Readiness Assessment**: Combine all conditions
+4. **Decision**: Either continue monitoring or emit event
 
-## 🐛 Known Issues & Cruft
+### Plugin Selection:
 
-1. **Manual Cleanup Required**: No automatic cleanup of completed settlements
-2. **No Background Monitoring**: Settlements must be manually monitored
-3. **Missing Retry Logic**: Failed settlements are not retried
-4. **Timestamp Inconsistency**: Mix of u64 and chrono timestamps
-5. **Unused is_profitable**: Plugin method exists but not called by service
-6. **No Cancel Support**: Cancel method in trait but not exposed by service
+1. **Default Strategy**: Try configured default first
+2. **Fallback Strategies**: Try each fallback if default can't handle
+3. **Chain/Type Support**: Verify plugin supports chain and order type
 
 ## 🔮 Future Improvements
 
-1. **Automatic Monitoring**: Background task to monitor active settlements
-2. **Retry Mechanism**: Configurable retry logic with exponential backoff
-3. **Event Emission**: Emit events for settlement status changes
-4. **Batch Settlement**: Support settling multiple fills in one transaction
-5. **Gas Optimization**: Dynamic gas pricing based on network conditions
-6. **MEV Protection**: Integration with private mempools for settlement
-7. **Analytics**: Settlement performance metrics and reporting
+1. **Configurable Check Interval**: Make monitoring interval configurable
+2. **Batch Monitoring**: Check multiple fills in parallel
+3. **Persistent State**: Store monitored fills for recovery after restart
+4. **Advanced Dispute Handling**: More sophisticated dispute resolution
+5. **Multi-Oracle Support**: Support multiple oracle sources
+6. **Analytics**: Settlement readiness metrics and reporting
 
 ## 📊 Performance Considerations
 
-- **Lock Contention**: Multiple RwLocks could cause contention
-- **Sequential Processing**: Settlements processed one at a time
-- **Plugin Iteration**: Linear search through plugins for capability check
-- **No Caching**: Plugin capabilities checked on every request
+- **Efficient Monitoring**: Single background task for all fills
+- **Minimal Lock Time**: Quick read/write operations on monitored fills
+- **No Blocking Operations**: All plugin calls are async
+- **Automatic Cleanup**: No memory leaks from completed fills
 
 ## ⚠️ Security Considerations
 
-- **Plugin Trust**: Plugins have full access to settlement data
-- **No Validation Caching**: Fill validation repeated for retries
-- **Profit Calculation**: Relies on plugin estimates, not verified
-- **Transaction Manipulation**: No verification of prepared transactions
+- **Plugin Trust**: Plugins determine settlement readiness
+- **Oracle Dependency**: Relies on oracle attestation accuracy
+- **Timing Attacks**: Claim windows must be carefully configured
+- **Event Ordering**: Events processed in order received
 
-The `solver-settlement` service provides a solid foundation for managing cross-chain settlements with profitability checks and plugin-based strategies, though it lacks automatic monitoring and retry mechanisms.
+## 📝 Summary
+
+The refactored `solver-settlement` service is now a pure orchestration service that:
+- Monitors confirmed fills for settlement readiness
+- Checks oracle attestations and timing constraints
+- Emits events when settlements can proceed
+- Delegates actual execution to the delivery service
+
+This clean separation of concerns makes the system more maintainable and flexible.
+

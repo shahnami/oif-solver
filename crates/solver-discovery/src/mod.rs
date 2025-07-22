@@ -14,10 +14,7 @@
 mod lib;
 
 // Re-export main types and traits
-pub use lib::{
-	DiscoveryService, DiscoveryServiceBuilder, DiscoveryServiceConfig, DiscoverySource,
-	DiscoveryStats, SourceStats, SourceStatus,
-};
+pub use lib::{DiscoveryService, DiscoveryServiceBuilder, DiscoverySource, SourceStatus};
 
 // Re-export commonly used types from solver-types
 pub use solver_types::plugins::{

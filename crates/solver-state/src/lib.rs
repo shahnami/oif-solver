@@ -360,7 +360,7 @@ impl StateServiceBuilder {
 		let service = StateService::new(self.config);
 
 		// Initialize and register all plugins
-		for (name, plugin, plugin_config) in self.plugins {
+		for (name, plugin, _) in self.plugins {
 			// Since StatePlugin uses Arc, we need to initialize before storing
 			// This is a bit tricky because we can't get mutable access to Arc contents
 			// For now, we'll register and let the service handle initialization

@@ -13,6 +13,7 @@ pub enum Event {
 	Discovery(DiscoveryEvent),
 	OrderCreated(OrderEvent),
 	OrderFill(FillEvent),
+	SettlementReady(SettlementReadyEvent),
 	Settlement(SettlementEvent),
 	ServiceStatus(StatusEvent),
 }
@@ -46,6 +47,14 @@ pub enum FillStatus {
 	Pending,
 	Confirmed,
 	Failed(String),
+}
+
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
+pub struct SettlementReadyEvent {
+	pub fill_event: FillEvent, // Original fill event for processing
+	pub oracle_attestation_id: Option<String>,
+	pub claim_window_start: Timestamp,
+	pub claim_window_end: Timestamp,
 }
 
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]

@@ -1,9 +1,9 @@
 // solver-types/src/plugins/order.rs
 
-use crate::{DeliveryRequest, Event, FillEvent, OrderEvent, PluginConfig};
+use crate::{DeliveryRequest, FillEvent, OrderEvent, PluginConfig};
 
 use super::delivery::TransactionRequest;
-use super::settlement::{FillData, SettlementRequest};
+use super::settlement::SettlementRequest;
 use super::{Address, BasePlugin, ChainId, PluginResult, Timestamp};
 use async_trait::async_trait;
 use bytes::Bytes;
@@ -191,44 +191,6 @@ pub trait OrderPluginFactory: Send + Sync {
 	type Order: Order;
 	type OrderId: Send + Sync + Clone + Debug + PartialEq + Eq + std::hash::Hash;
 	type ParseContext: Send + Sync + Clone + Debug;
-}
-
-/// Registry for order plugins
-#[derive(Default)]
-pub struct OrderPluginRegistry {
-	factories: HashMap<String, Box<dyn std::any::Any + Send + Sync>>,
-}
-
-impl OrderPluginRegistry {
-	pub fn new() -> Self {
-		Self::default()
-	}
-
-	pub fn register<F>(&mut self, factory: F)
-	where
-		F: OrderPluginFactory + 'static,
-	{
-		self.factories
-			.insert(factory.plugin_type().to_string(), Box::new(factory));
-	}
-
-	pub fn create_plugin(
-		&self,
-		plugin_type: &str,
-		config: super::PluginConfig,
-	) -> PluginResult<Box<dyn std::any::Any>> {
-		let _factory = self
-			.factories
-			.get(plugin_type)
-			.ok_or_else(|| super::PluginError::NotFound(plugin_type.to_string()))?;
-
-		// This is a bit tricky with trait objects - in practice you'd need a more sophisticated approach
-		Ok(Box::new(()) as Box<dyn std::any::Any>)
-	}
-
-	pub fn list_plugin_types(&self) -> Vec<&str> {
-		self.factories.keys().map(|s| s.as_str()).collect()
-	}
 }
 
 /// Trait for processing OrderEvents and creating TransactionRequests

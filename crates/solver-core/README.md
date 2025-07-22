@@ -125,25 +125,37 @@ Discovery Plugin → OrderCreated Event → Orchestrator
                                     Process Order
                                            │
                                            ▼
-                                    Store in State
-                                           │
-                                           ▼
                                     Delivery Service
                                            │
                                            ▼
-                                    Fill Event → Monitor
+                                    Fill Event (Pending)
+                                           │
+                                           ▼
+                                    Monitor Fill Status
+                                           │
+                                           ▼
+                                    Fill Confirmed
                                            │
                                            ▼
                                     Settlement Service
+                                    (Monitor Conditions)
+                                           │
+                                           ▼
+                                    SettlementReadyEvent
+                                           │
+                                           ▼
+                                    Delivery Service
+                                    (Execute Settlement)
 ```
 
 ### Event Types Handled:
 
 1. **Discovery Events**: New orders from various sources
-2. **Order Events**: Order creation and updates
+2. **Order Events**: Order creation and updates  
 3. **Fill Events**: Transaction execution status
-4. **Settlement Events**: Cross-chain settlement status
-5. **Service Status Events**: Health and operational updates
+4. **SettlementReady Events**: Settlement conditions met
+5. **Settlement Events**: Settlement execution status
+6. **Service Status Events**: Health and operational updates
 
 ## 🔌 Plugin System
 

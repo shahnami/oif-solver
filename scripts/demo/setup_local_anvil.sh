@@ -354,12 +354,8 @@ plugin_type = "direct_settlement"
 [plugins.settlement.direct_settlement.config]
 oracle_address = "$ORACLE_ADDRESS"
 min_confirmations = 1
-gas_multiplier = 1.2
-max_gas_price = 100000000000  # 100 gwei
-settlement_timeout = 300  # 5 minutes
-
-[plugins.settlement.direct_settlement.config.settler_contracts]
-$CHAIN_ID = "$SETTLER_ADDRESS"
+dispute_period_seconds = 10  # 10 seconds for testing
+claim_window_seconds = 86400  # 24 hours
 
 # Delivery configuration
 [delivery]
@@ -369,20 +365,14 @@ max_parallel_attempts = 1
 
 # Settlement configuration
 [settlement]
-default_strategy = "direct"
+default_strategy = "direct_settlement"
 fallback_strategies = []
 profit_threshold_wei = "0"  # No profit requirement for testing
 
 # Discovery configuration
 [discovery]
-historical_sync = false
 realtime_monitoring = true
-dedupe_events = true
-max_event_age_seconds = 300  # 5 minutes
-# Additional configurable fields with defaults
 max_events_per_second = 1000
-event_buffer_size = 10000
-deduplication_window_seconds = 300
 max_concurrent_sources = 10
 
 # State configuration

@@ -6,7 +6,7 @@ use solver_types::plugins::{
 	delivery::{
 		TransactionMetadata, TransactionPriority, TransactionRequest, TransactionRequestType,
 	},
-	FillData, OrderPlugin, PluginError, PluginResult,
+	OrderPlugin, PluginError, PluginResult,
 };
 use solver_types::{DeliveryPriority, Order, OrderProcessor, SettlementPriority};
 use std::sync::Arc;
