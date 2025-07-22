@@ -210,19 +210,22 @@ pub struct OrderInfo {
 ///
 /// ## Architecture
 ///
-/// The orchestrator follows an event-driven architecture where:
-/// - Discovery services emit order discovery events
-/// - Order events trigger delivery processing
-/// - Successful deliveries trigger settlement monitoring
+/// The orchestrator coordinates services through channel-based event processing:
+/// - Discovery services send events via channels to orchestrator
+/// - Orchestrator processes events sequentially in a single loop
+/// - Events trigger corresponding service operations
 /// - All state changes are tracked and persisted
 ///
-/// ## Event Flow
+/// ## Event Processing Flow
 ///
-/// 1. Discovery plugins find new orders and emit `DiscoveryEvent`
-/// 2. Orders are converted to `OrderEvent` and processed
-/// 3. Delivery service processes orders and emits `FillEvent`
-/// 4. Settlement service monitors fills and emits `SettlementEvent`
-/// 5. All events are persisted in the state service
+/// 1. Discovery plugins find new orders and send `DiscoveryEvent` via EventSink
+/// 2. Orchestrator receives events through mpsc::UnboundedReceiver
+/// 3. Events are processed sequentially in handle_event() method
+/// 4. Each event type triggers specific service operations
+/// 5. State changes are persisted through the state service
+///
+/// **Note**: This is not a traditional event bus - events are processed
+/// sequentially without persistence, replay, or complex routing capabilities.
 pub struct Orchestrator {
 	/// System configuration with plugin settings
 	config: Arc<RwLock<SolverConfig>>,

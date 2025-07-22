@@ -86,7 +86,7 @@ pub struct SolverConfig {
 
 ### 2. **Event System** (`events.rs`)
 
-Central event bus for inter-service communication:
+Channel-based event processing for inter-service communication:
 
 ```rust
 pub enum Event {
@@ -98,14 +98,32 @@ pub enum Event {
 }
 ```
 
-**Event Flow:**
+**Event Flow (Sequential Processing):**
 
 ```text
-Discovery → OrderCreated → OrderFill → Settlement
-    │            │            │            │
-    └────────────┴────────────┴────────────┘
-                      Event Bus
+Discovery Plugin → EventSink → Orchestrator → Sequential Handler
+                                      ↓
+                              match event { ... }
+                                      ↓
+                             Service Operations
 ```
+
+**Implementation Details:**
+- Uses `tokio::sync::mpsc::UnboundedReceiver<Event>` for event channels
+- Sequential event processing in main event loop
+- Concurrent background tasks for monitoring and health checks
+- No event persistence or replay capability
+- Events are lost on system failure
+
+**Concurrency Model:**
+- **Event Processing**: Sequential, blocking event handling
+- **Background Tasks**: Parallel health monitoring, fill monitoring, plugin tasks
+- **No Event Broadcasting**: Single consumer event channel
+
+**Limitations:**
+- No complex event routing or filtering
+- No backpressure management
+- Events processed synchronously, can block on slow operations
 
 ### 3. **Plugin System** (`plugins/`)
 
