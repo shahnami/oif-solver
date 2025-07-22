@@ -13,6 +13,19 @@ NC='\033[0m' # No Color
 echo -e "${BLUE}📤 Sending EIP-7683 Intent Transaction${NC}"
 echo "====================================="
 
+# Check required commands
+if ! command -v bc &> /dev/null; then
+    echo -e "${RED}❌ 'bc' command not found!${NC}"
+    echo -e "${YELLOW}💡 Install bc: brew install bc (macOS) or apt-get install bc (Linux)${NC}"
+    exit 1
+fi
+
+if ! command -v cast &> /dev/null; then
+    echo -e "${RED}❌ 'cast' command not found!${NC}"
+    echo -e "${YELLOW}💡 Install foundry: curl -L https://foundry.paradigm.xyz | bash${NC}"
+    exit 1
+fi
+
 # Check if config exists
 if [ ! -f "config/local.toml" ]; then
     echo -e "${RED}❌ Configuration not found!${NC}"
@@ -22,31 +35,37 @@ fi
 
 # Extract contract addresses from config
 # Using more robust parsing for nested TOML structure (handle indentation)
-TOKEN_ADDRESS=$(grep 'token = ' config/local.toml | head -1 | cut -d'"' -f2)
-SETTLER_ADDRESS=$(grep 'input_settler = ' config/local.toml | head -1 | cut -d'"' -f2)
+ORIGIN_TOKEN_ADDRESS=$(grep 'token = ' config/local.toml | head -1 | cut -d'"' -f2)
+DEST_TOKEN_ADDRESS=$(grep -A 10 '\[contracts.destination\]' config/local.toml | grep 'token = ' | cut -d'"' -f2)
+INPUT_SETTLER_ADDRESS=$(grep 'input_settler = ' config/local.toml | head -1 | cut -d'"' -f2)
+OUTPUT_SETTLER_ADDRESS=$(grep -A 10 '\[contracts.destination\]' config/local.toml | grep 'output_settler = ' | cut -d'"' -f2)
 ORACLE_ADDRESS=$(grep 'oracle = ' config/local.toml | head -1 | cut -d'"' -f2)
 USER_ADDR=$(grep 'user = ' config/local.toml | head -1 | cut -d'"' -f2)
 USER_PRIVATE_KEY=$(grep 'user_private_key = ' config/local.toml | head -1 | cut -d'"' -f2)
 SOLVER_ADDR=$(grep 'solver = ' config/local.toml | head -1 | cut -d'"' -f2)
+RECIPIENT_ADDR=$(grep 'recipient = ' config/local.toml | head -1 | cut -d'"' -f2)
 
 # Configuration
-RPC_URL="http://localhost:8545"
+ORIGIN_RPC_URL="http://localhost:8545"
+DEST_RPC_URL="http://localhost:8546"
+RPC_URL=$ORIGIN_RPC_URL  # Default for compatibility
 AMOUNT="1000000000000000000"  # 1 token
-RECIPIENT_ADDR="0x3C44CdDdB6a900fa2b585dd299e03d12FA4293BC"  # Account #2
 
-echo -e "${BLUE}📋 Intent Details:${NC}"
+echo -e "${BLUE}📋 Cross-Chain Intent Details:${NC}"
 echo -e "   User (depositor): $USER_ADDR"
-echo -e "   Solver:          $SOLVER_ADDR"
-echo -e "   Recipient:       $RECIPIENT_ADDR"
-echo -e "   Amount:          1.0 TEST tokens"
-echo -e "   Token:           $TOKEN_ADDRESS"
-echo -e "   InputSettler:    $SETTLER_ADDRESS"
+echo -e "   Solver:           $SOLVER_ADDR"
+echo -e "   Recipient:        $RECIPIENT_ADDR"
+echo -e "   Amount:           1.0 TEST tokens"
+echo -e "   Origin Token:     $ORIGIN_TOKEN_ADDRESS (Chain 31337)"
+echo -e "   Dest Token:       $DEST_TOKEN_ADDRESS (Chain 31338)"
+echo -e "   InputSettler:     $INPUT_SETTLER_ADDRESS (Origin)"
+echo -e "   OutputSettler:    $OUTPUT_SETTLER_ADDRESS (Destination)"
 
 # Debug mode - uncomment to see what's being extracted
 if [ "$DEBUG" = "1" ]; then
     echo -e "${YELLOW}🔍 Debug Info:${NC}"
     echo -e "   RPC_URL: $RPC_URL"
-    echo -e "   TOKEN_ADDRESS length: ${#TOKEN_ADDRESS}"
+    echo -e "   ORIGIN_TOKEN_ADDRESS length: ${#ORIGIN_TOKEN_ADDRESS}"
     echo -e "   USER_ADDR length: ${#USER_ADDR}"
     echo -e "   Config file exists: $([ -f "config/local.toml" ] && echo "Yes" || echo "No")"
 fi
@@ -55,19 +74,21 @@ fi
 check_balance() {
     local address=$1
     local name=$2
+    local rpc_url=${3:-$RPC_URL}
+    local token_addr=${4:-$ORIGIN_TOKEN_ADDRESS}
     
     # Debug mode - show the exact command being run
     if [ "$DEBUG" = "1" ]; then
-        echo -e "${YELLOW}   Debug: cast call $TOKEN_ADDRESS \"balanceOf(address)\" $address --rpc-url $RPC_URL${NC}"
+        echo -e "${YELLOW}   Debug: cast call $token_addr \"balanceOf(address)\" $address --rpc-url $rpc_url${NC}"
     fi
     
     # Filter out debug logs and only get the hex value (starts with 0x)
-    local balance_hex=$(cast call $TOKEN_ADDRESS "balanceOf(address)" $address --rpc-url $RPC_URL 2>&1 | grep -E '^0x[0-9a-fA-F]+$' | tail -1)
+    local balance_hex=$(cast call $token_addr "balanceOf(address)" $address --rpc-url $rpc_url 2>&1 | grep -E '^0x[0-9a-fA-F]+$' | tail -1)
     
     # Debug: Check if balance_hex is empty
     if [ -z "$balance_hex" ]; then
         # Try without suppressing errors to see what's wrong
-        local error_msg=$(cast call $TOKEN_ADDRESS "balanceOf(address)" $address --rpc-url $RPC_URL 2>&1)
+        local error_msg=$(cast call $token_addr "balanceOf(address)" $address --rpc-url $rpc_url 2>&1)
         if [ "$DEBUG" = "1" ]; then
             echo -e "${RED}   Error for $name: $error_msg${NC}"
         fi
@@ -87,11 +108,17 @@ check_balance() {
 
 # Function to show current balances
 show_balances() {
-    echo -e "${BLUE}💰 Current Balances:${NC}"
-    check_balance $USER_ADDR "User"
-    check_balance $SOLVER_ADDR "Solver"
-    check_balance $RECIPIENT_ADDR "Recipient"
-    check_balance $SETTLER_ADDRESS "InputSettler"
+    echo -e "${BLUE}💰 Current Balances on Origin Chain (31337):${NC}"
+    check_balance $USER_ADDR "User" $ORIGIN_RPC_URL $ORIGIN_TOKEN_ADDRESS
+    check_balance $SOLVER_ADDR "Solver" $ORIGIN_RPC_URL $ORIGIN_TOKEN_ADDRESS
+    check_balance $RECIPIENT_ADDR "Recipient" $ORIGIN_RPC_URL $ORIGIN_TOKEN_ADDRESS
+    check_balance $INPUT_SETTLER_ADDRESS "InputSettler" $ORIGIN_RPC_URL $ORIGIN_TOKEN_ADDRESS
+    
+    echo -e "${BLUE}💰 Current Balances on Destination Chain (31338):${NC}"
+    check_balance $USER_ADDR "User" $DEST_RPC_URL $DEST_TOKEN_ADDRESS
+    check_balance $SOLVER_ADDR "Solver" $DEST_RPC_URL $DEST_TOKEN_ADDRESS
+    check_balance $RECIPIENT_ADDR "Recipient" $DEST_RPC_URL $DEST_TOKEN_ADDRESS
+    check_balance $OUTPUT_SETTLER_ADDRESS "OutputSettler" $DEST_RPC_URL $DEST_TOKEN_ADDRESS
 }
 
 # Function to build EIP-7683 intent data
@@ -105,8 +132,9 @@ build_intent_data() {
     AMOUNT_HEX=$(printf "%064x" $AMOUNT)
     EXPIRY_HEX=$(printf "%064x" $EXPIRY)
     
-    # Remove 0x prefix and pad addresses to 32 bytes
-    TOKEN_BYTES32="000000000000000000000000${TOKEN_ADDRESS:2}"
+    # Remove 0x prefix and pad addresses to 32 bytes (using origin token for input)
+    ORIGIN_TOKEN_BYTES32="000000000000000000000000${ORIGIN_TOKEN_ADDRESS:2}"
+    DEST_TOKEN_BYTES32="000000000000000000000000${DEST_TOKEN_ADDRESS:2}"
     RECIPIENT_BYTES32="000000000000000000000000${RECIPIENT_ADDR:2}"
     ORACLE_BYTES32="000000000000000000000000${ORACLE_ADDRESS:2}"
     
@@ -131,8 +159,8 @@ build_intent_data() {
     # inputs array: 1 input
     ORDER_DATA="${ORDER_DATA}0000000000000000000000000000000000000000000000000000000000000001"
     
-    # Input struct: (token, amount)
-    ORDER_DATA="${ORDER_DATA}${TOKEN_BYTES32}"
+    # Input struct: (token, amount) - user deposits this on origin chain
+    ORDER_DATA="${ORDER_DATA}${ORIGIN_TOKEN_BYTES32}"
     ORDER_DATA="${ORDER_DATA}${AMOUNT_HEX}"
     
     # outputs array: 1 output  
@@ -145,15 +173,15 @@ build_intent_data() {
     # oracle (bytes32) - zero for same-chain
     ORDER_DATA="${ORDER_DATA}0000000000000000000000000000000000000000000000000000000000000000"
     
-    # settler (bytes32) - use same settler for same-chain
-    SETTLER_BYTES32="000000000000000000000000${SETTLER_ADDRESS:2}"
-    ORDER_DATA="${ORDER_DATA}${SETTLER_BYTES32}"
+    # settler (bytes32) - use OutputSettler on destination chain
+    OUTPUT_SETTLER_BYTES32="000000000000000000000000${OUTPUT_SETTLER_ADDRESS:2}"
+    ORDER_DATA="${ORDER_DATA}${OUTPUT_SETTLER_BYTES32}"
     
-    # chainId - same chain (31337)
-    ORDER_DATA="${ORDER_DATA}0000000000000000000000000000000000000000000000000000000000007a69"
+    # chainId - destination chain (31338)
+    ORDER_DATA="${ORDER_DATA}0000000000000000000000000000000000000000000000000000000000007a6a"
     
-    # token (bytes32) - same token
-    ORDER_DATA="${ORDER_DATA}${TOKEN_BYTES32}"
+    # token (bytes32) - destination token
+    ORDER_DATA="${ORDER_DATA}${DEST_TOKEN_BYTES32}"
     
     # amount - same amount
     ORDER_DATA="${ORDER_DATA}${AMOUNT_HEX}"
@@ -194,22 +222,23 @@ approve_tokens() {
     
     # Check current allowance
     # Filter out debug logs and only get the hex value
-    CURRENT_ALLOWANCE=$(cast call $TOKEN_ADDRESS \
+    CURRENT_ALLOWANCE=$(cast call $ORIGIN_TOKEN_ADDRESS \
         "allowance(address,address)" \
         $USER_ADDR \
-        $SETTLER_ADDRESS \
+        $INPUT_SETTLER_ADDRESS \
         --rpc-url $RPC_URL 2>&1 | grep -E '^0x[0-9a-fA-F]+$' | tail -1)
     
     # Convert to decimal for comparison
     ALLOWANCE_DEC=$(cast to-dec $CURRENT_ALLOWANCE 2>/dev/null || echo "0")
     REQUIRED_ALLOWANCE=$(cast to-dec $AMOUNT 2>/dev/null || echo "0")
     
-    if [ $ALLOWANCE_DEC -lt $REQUIRED_ALLOWANCE ]; then
+    # Use bc for large number comparison
+    if [ $(echo "$ALLOWANCE_DEC < $REQUIRED_ALLOWANCE" | bc) -eq 1 ]; then
         echo -e "${BLUE}   Insufficient allowance, approving...${NC}"
         
-        APPROVE_TX=$(cast send $TOKEN_ADDRESS \
+        APPROVE_TX=$(cast send $ORIGIN_TOKEN_ADDRESS \
             "approve(address,uint256)" \
-            $SETTLER_ADDRESS \
+            $INPUT_SETTLER_ADDRESS \
             "1000000000000000000000000" \
             --rpc-url $RPC_URL \
             --private-key $USER_PRIVATE_KEY 2>&1)
@@ -233,7 +262,7 @@ send_intent() {
     # Call InputSettler7683.open()
     echo -e "${BLUE}   Calling InputSettler7683.open()...${NC}"
     
-    INTENT_TX=$(cast send $SETTLER_ADDRESS \
+    INTENT_TX=$(cast send $INPUT_SETTLER_ADDRESS \
         "open((uint32,bytes32,bytes))" \
         "($EXPIRY,$ORDER_DATA_TYPE,$ORDER_DATA)" \
         --rpc-url $RPC_URL \
@@ -263,8 +292,9 @@ send_intent() {
         fi
         
         # Wait for transaction to be mined
-        echo -e "${YELLOW}⏳ Waiting for transaction to be processed...${NC}"
-        sleep 3
+        WAIT_TIME="${WAIT_TIME:-30}"
+        echo -e "${YELLOW}⏳ Waiting for transaction to be processed...(${WAIT_TIME}s)${NC}"
+        sleep $WAIT_TIME
         
         return 0
     else
@@ -276,25 +306,58 @@ send_intent() {
 
 # Function to verify transaction
 verify_transaction() {
-    echo -e "${YELLOW}🔍 Verifying transaction results...${NC}"
+    echo -e "${YELLOW}🔍 Verifying cross-chain intent creation...${NC}"
     
-    # Check if tokens were transferred to InputSettler (escrowed)
-    # Filter out debug logs and only get the hex value
-    SETTLER_BALANCE_HEX=$(cast call $TOKEN_ADDRESS "balanceOf(address)" $SETTLER_ADDRESS --rpc-url $RPC_URL 2>&1 | grep -E '^0x[0-9a-fA-F]+$' | tail -1)
+    # For cross-chain intents, we expect:
+    # Origin chain: User deposits tokens to InputSettler
+    # Destination chain: No immediate changes (solver will fill later)
+    
+    # Get current balances on origin chain
+    USER_BALANCE_HEX=$(cast call $ORIGIN_TOKEN_ADDRESS "balanceOf(address)" $USER_ADDR --rpc-url $ORIGIN_RPC_URL 2>&1 | grep -E '^0x[0-9a-fA-F]+$' | tail -1)
+    USER_BALANCE_DEC=$(cast to-dec $USER_BALANCE_HEX 2>/dev/null || echo "0")
+    
+    SETTLER_BALANCE_HEX=$(cast call $ORIGIN_TOKEN_ADDRESS "balanceOf(address)" $INPUT_SETTLER_ADDRESS --rpc-url $ORIGIN_RPC_URL 2>&1 | grep -E '^0x[0-9a-fA-F]+$' | tail -1)
     SETTLER_BALANCE_DEC=$(cast to-dec $SETTLER_BALANCE_HEX 2>/dev/null || echo "0")
     
-    if [ $SETTLER_BALANCE_DEC -ge $AMOUNT ]; then
-        echo -e "${GREEN}✅ Tokens successfully escrowed in InputSettler${NC}"
-        echo -e "   InputSettler balance: $(echo "scale=2; $SETTLER_BALANCE_DEC / 1000000000000000000" | bc -l 2>/dev/null || echo "unknown") TEST"
+    # Calculate balance changes
+    USER_BALANCE_CHANGE=$(echo "$USER_BALANCE_DEC - $INITIAL_USER_BALANCE" | bc)
+    SETTLER_BALANCE_CHANGE=$(echo "$SETTLER_BALANCE_DEC - $INITIAL_SETTLER_BALANCE" | bc)
+    
+    # Expected changes: User loses 1 TEST (deposited via InputSettler)
+    EXPECTED_USER_CHANGE=$(echo "-$AMOUNT" | bc)
+    EXPECTED_SETTLER_CHANGE="0"
+    
+    # Verify origin chain changes
+    USER_CORRECT=$(echo "$USER_BALANCE_CHANGE == $EXPECTED_USER_CHANGE" | bc)
+    SETTLER_CORRECT=$(echo "$SETTLER_BALANCE_CHANGE == $EXPECTED_SETTLER_CHANGE" | bc)
+    
+    if [ "$USER_CORRECT" -eq 1 ] && [ "$SETTLER_CORRECT" -eq 1 ]; then
+        echo -e "${GREEN}✅ Cross-chain intent created successfully!${NC}"
+        echo ""
+        echo -e "${BLUE}📊 Origin Chain (31337) - Intent Created:${NC}"
+        echo -e "   User deposited: $(echo "scale=2; -$USER_BALANCE_CHANGE / 1000000000000000000" | bc -l) TEST → InputSettler"
+        echo -e "   InputSettler holding: $(echo "scale=2; $SETTLER_BALANCE_CHANGE / 1000000000000000000" | bc -l) TEST"
+        echo ""
+        echo -e "${YELLOW}⏳ Waiting for solver to fill on destination chain...${NC}"
+        echo -e "   The solver will:"
+        echo -e "   1. Send 1 TEST to recipient on destination chain (31338)"
+        echo -e "   2. Claim 1 TEST from InputSettler on origin chain (31337)"
     else
-        echo -e "${RED}❌ Tokens were not properly escrowed${NC}"
+        echo -e "${RED}❌ Intent creation failed${NC}"
+        echo -e "   User balance change: $(echo "scale=2; $USER_BALANCE_CHANGE / 1000000000000000000" | bc -l) TEST (expected: -1.0)"
+        echo -e "   InputSettler balance change: $(echo "scale=2; $SETTLER_BALANCE_CHANGE / 1000000000000000000" | bc -l) TEST (expected: +1.0)"
         return 1
     fi
     
-    # Check event logs (simplified)
-    echo -e "${BLUE}📋 Intent created and ready for solver discovery${NC}"
-    echo -e "${YELLOW}💡 The solver should now discover this intent and process it${NC}"
+    echo ""
+    echo -e "${BLUE}📋 Cross-chain intent is ready for solver discovery${NC}"
 }
+
+# Global variables to store initial balances
+INITIAL_USER_BALANCE=""
+INITIAL_RECIPIENT_BALANCE=""
+INITIAL_SOLVER_BALANCE=""
+INITIAL_SETTLER_BALANCE=""
 
 # Main execution
 main() {
@@ -308,17 +371,31 @@ main() {
     echo -e "${BLUE}🔍 Checking prerequisites...${NC}"
     
     # Verify contracts are deployed
-    if ! cast code $TOKEN_ADDRESS --rpc-url $RPC_URL | grep -q "0x"; then
-        echo -e "${RED}❌ TestToken not deployed at $TOKEN_ADDRESS${NC}"
+    if ! cast code $ORIGIN_TOKEN_ADDRESS --rpc-url $RPC_URL | grep -q "0x"; then
+        echo -e "${RED}❌ TestToken not deployed at $ORIGIN_TOKEN_ADDRESS${NC}"
         exit 1
     fi
     
-    if ! cast code $SETTLER_ADDRESS --rpc-url $RPC_URL | grep -q "0x"; then
-        echo -e "${RED}❌ InputSettler7683 not deployed at $SETTLER_ADDRESS${NC}"
+    if ! cast code $INPUT_SETTLER_ADDRESS --rpc-url $RPC_URL | grep -q "0x"; then
+        echo -e "${RED}❌ InputSettler7683 not deployed at $INPUT_SETTLER_ADDRESS${NC}"
         exit 1
     fi
     
     echo -e "${GREEN}✅ All contracts verified${NC}"
+    
+    # Store initial balances for comparison
+    echo -e "${BLUE}📊 Storing initial balances...${NC}"
+    INITIAL_USER_BALANCE_HEX=$(cast call $ORIGIN_TOKEN_ADDRESS "balanceOf(address)" $USER_ADDR --rpc-url $ORIGIN_RPC_URL 2>&1 | grep -E '^0x[0-9a-fA-F]+$' | tail -1)
+    INITIAL_USER_BALANCE=$(cast to-dec $INITIAL_USER_BALANCE_HEX 2>/dev/null || echo "0")
+    
+    INITIAL_SOLVER_BALANCE_HEX=$(cast call $ORIGIN_TOKEN_ADDRESS "balanceOf(address)" $SOLVER_ADDR --rpc-url $ORIGIN_RPC_URL 2>&1 | grep -E '^0x[0-9a-fA-F]+$' | tail -1)
+    INITIAL_SOLVER_BALANCE=$(cast to-dec $INITIAL_SOLVER_BALANCE_HEX 2>/dev/null || echo "0")
+    
+    INITIAL_SETTLER_BALANCE_HEX=$(cast call $ORIGIN_TOKEN_ADDRESS "balanceOf(address)" $INPUT_SETTLER_ADDRESS --rpc-url $ORIGIN_RPC_URL 2>&1 | grep -E '^0x[0-9a-fA-F]+$' | tail -1)
+    INITIAL_SETTLER_BALANCE=$(cast to-dec $INITIAL_SETTLER_BALANCE_HEX 2>/dev/null || echo "0")
+    
+    INITIAL_RECIPIENT_BALANCE_HEX=$(cast call $ORIGIN_TOKEN_ADDRESS "balanceOf(address)" $RECIPIENT_ADDR --rpc-url $ORIGIN_RPC_URL 2>&1 | grep -E '^0x[0-9a-fA-F]+$' | tail -1)
+    INITIAL_RECIPIENT_BALANCE=$(cast to-dec $INITIAL_RECIPIENT_BALANCE_HEX 2>/dev/null || echo "0")
     
     # Show initial balances
     echo ""
@@ -359,11 +436,22 @@ case "${1:-send}" in
         ;;
     "balances")
         if [ -f "config/local.toml" ]; then
-            TOKEN_ADDRESS=$(grep 'token = ' config/local.toml | head -1 | cut -d'"' -f2)
-            SETTLER_ADDRESS=$(grep 'input_settler = ' config/local.toml | head -1 | cut -d'"' -f2)
+            # Check required commands first
+            if ! command -v bc &> /dev/null; then
+                echo -e "${RED}❌ 'bc' command not found!${NC}"
+                echo -e "${YELLOW}💡 Install bc: brew install bc (macOS) or apt-get install bc (Linux)${NC}"
+                exit 1
+            fi
+            
+            ORIGIN_TOKEN_ADDRESS=$(grep 'token = ' config/local.toml | head -1 | cut -d'"' -f2)
+            DEST_TOKEN_ADDRESS=$(grep -A 10 '\[contracts.destination\]' config/local.toml | grep 'token = ' | cut -d'"' -f2)
+            INPUT_SETTLER_ADDRESS=$(grep 'input_settler = ' config/local.toml | head -1 | cut -d'"' -f2)
+            OUTPUT_SETTLER_ADDRESS=$(grep -A 10 '\[contracts.destination\]' config/local.toml | grep 'output_settler = ' | cut -d'"' -f2)
             USER_ADDR=$(grep 'user = ' config/local.toml | head -1 | cut -d'"' -f2)
             SOLVER_ADDR=$(grep 'solver = ' config/local.toml | head -1 | cut -d'"' -f2)
-            RECIPIENT_ADDR="0x3C44CdDdB6a900fa2b585dd299e03d12FA4293BC"  # Account #2
+            RECIPIENT_ADDR=$(grep 'recipient = ' config/local.toml | head -1 | cut -d'"' -f2)
+            ORIGIN_RPC_URL="http://localhost:8545"
+            DEST_RPC_URL="http://localhost:8546"
             show_balances
         else
             echo -e "${RED}❌ Configuration not found!${NC}"
@@ -371,10 +459,18 @@ case "${1:-send}" in
         ;;
     "approve")
         if [ -f "config/local.toml" ]; then
-            TOKEN_ADDRESS=$(grep 'token = ' config/local.toml | head -1 | cut -d'"' -f2)
-            SETTLER_ADDRESS=$(grep 'input_settler = ' config/local.toml | head -1 | cut -d'"' -f2)
+            # Check required commands first
+            if ! command -v bc &> /dev/null; then
+                echo -e "${RED}❌ 'bc' command not found!${NC}"
+                echo -e "${YELLOW}💡 Install bc: brew install bc (macOS) or apt-get install bc (Linux)${NC}"
+                exit 1
+            fi
+            
+            ORIGIN_TOKEN_ADDRESS=$(grep 'token = ' config/local.toml | head -1 | cut -d'"' -f2)
+            INPUT_SETTLER_ADDRESS=$(grep 'input_settler = ' config/local.toml | head -1 | cut -d'"' -f2)
             USER_ADDR=$(grep 'user = ' config/local.toml | head -1 | cut -d'"' -f2)
             USER_PRIVATE_KEY=$(grep 'user_private_key = ' config/local.toml | head -1 | cut -d'"' -f2)
+            RPC_URL="http://localhost:8545"
             AMOUNT="1000000000000000000"  # 1 token
             approve_tokens
         else
@@ -388,6 +484,10 @@ case "${1:-send}" in
         echo "  send (default) - Send a complete intent transaction"
         echo "  balances       - Check current token balances"
         echo "  approve        - Just approve tokens (no intent)"
+        echo ""
+        echo "Environment variables:"
+        echo "  DEBUG=1       - Enable debug output"
+        echo "  WAIT_TIME=60  - Set wait time after transaction (default: 30s)"
         exit 1
         ;;
 esac

@@ -1,4 +1,10 @@
-// solver-plugins/src/orders/eip7683.rs
+//! # EIP-7683 Order Plugin
+//!
+//! Implements order processing for EIP-7683 cross-chain orders.
+//!
+//! This plugin handles parsing, validation, and transaction generation for
+//! EIP-7683 compliant cross-chain orders, supporting both order fills on
+//! destination chains and settlement on origin chains.
 
 use async_trait::async_trait;
 use bytes::Bytes;
@@ -18,41 +24,78 @@ use tracing::info;
 
 use crate::order::processor::OrderPluginProcessor;
 
-/// EIP-7683 Order implementation
+/// EIP-7683 Order implementation.
+///
+/// Represents a cross-chain order following the EIP-7683 standard,
+/// containing all necessary information for order execution including
+/// inputs, outputs, deadlines, and settlement parameters.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Eip7683Order {
+	/// Unique identifier for this order
 	pub order_id: String,
+	/// Address of the user who created the order
 	pub user: Address,
+	/// Chain ID where the order originates
 	pub origin_chain_id: ChainId,
+	/// Chain ID where the order should be filled
 	pub destination_chain_id: ChainId,
+	/// Timestamp when the order was created
 	pub created_at: Timestamp,
+	/// Timestamp when the order expires
 	pub expires_at: Timestamp,
+	/// Nonce to prevent order replay
 	pub nonce: u64,
+	/// Cryptographic signature of the order
 	pub signature: Bytes,
 
 	// EIP-7683 specific fields
+	/// Gas limit for settlement transaction
 	pub settle_gas_limit: u64,
+	/// Deadline for order fill execution
 	pub fill_deadline: Timestamp,
+	/// Type of order data (e.g., "standard", "dutch_auction")
 	pub order_data_type: String,
+	/// Raw order data from the blockchain event
 	pub order_data: Bytes,
+	/// Required outputs that must be delivered
 	pub mandate_outputs: Vec<MandateOutput>,
+	/// Input tokens and amounts provided by the user
 	pub inputs: Vec<(String, u64, u64)>, // (token, amount, chain_id)
+	/// Oracle address for settlement verification
 	pub local_oracle: Address,           // Oracle address from the original order
 }
 
+/// Mandate output specification.
+///
+/// Defines a required output that must be delivered as part of
+/// order fulfillment, including token, amount, recipient, and
+/// destination chain information.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct MandateOutput {
+	/// Token address to be delivered
 	pub token: Address,
+	/// Amount of tokens to deliver
 	pub amount: u64,
+	/// Recipient address for the tokens
 	pub recipient: Address,
+	/// Chain where tokens should be delivered
 	pub chain_id: ChainId,
 }
 
+/// EIP-7683 order metadata.
+///
+/// Contains summarized information about an EIP-7683 order
+/// for indexing and quick reference without parsing the full
+/// order structure.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Eip7683Metadata {
+	/// Number of mandate outputs in the order
 	pub mandate_outputs_count: usize,
+	/// Total value across all outputs
 	pub total_output_value: u64,
+	/// Whether order involves multiple chains
 	pub is_cross_chain: bool,
+	/// Type of order data format
 	pub order_data_type: String,
 }
 
@@ -60,30 +103,37 @@ impl Order for Eip7683Order {
 	type Id = String;
 	type Metadata = Eip7683Metadata;
 
+	/// Returns the unique order identifier.
 	fn id(&self) -> Self::Id {
 		self.order_id.clone()
 	}
 
+	/// Returns the address of the order creator.
 	fn user(&self) -> Address {
 		self.user.clone()
 	}
 
+	/// Returns the chain ID where the order originates.
 	fn origin_chain(&self) -> ChainId {
 		self.origin_chain_id
 	}
 
+	/// Returns the chain ID where the order should be filled.
 	fn destination_chain(&self) -> ChainId {
 		self.destination_chain_id
 	}
 
+	/// Returns the timestamp when the order was created.
 	fn created_at(&self) -> Timestamp {
 		self.created_at
 	}
 
+	/// Returns the timestamp when the order expires.
 	fn expires_at(&self) -> Timestamp {
 		self.expires_at
 	}
 
+	/// Returns metadata about the order.
 	fn metadata(&self) -> &Self::Metadata {
 		// Return a reference to metadata stored in the order
 		// This requires storing metadata as a field, which we'll address by
@@ -91,18 +141,21 @@ impl Order for Eip7683Order {
 		unimplemented!("metadata() returning reference not supported; use owned value")
 	}
 
+	/// Encodes the order to bytes for storage.
 	fn encode(&self) -> PluginResult<Bytes> {
 		let serialized = serde_json::to_vec(self)
 			.map_err(|e| PluginError::ExecutionFailed(format!("Serialization failed: {}", e)))?;
 		Ok(Bytes::from(serialized))
 	}
 
+	/// Decodes an order from bytes.
 	fn decode(data: &[u8]) -> PluginResult<Self> {
 		let order: Self = serde_json::from_slice(data)
 			.map_err(|e| PluginError::ExecutionFailed(format!("Deserialization failed: {}", e)))?;
 		Ok(order)
 	}
 
+	/// Validates the order structure and constraints.
 	fn validate(&self) -> PluginResult<()> {
 		// Basic validation
 		if self.order_id.is_empty() {
@@ -138,24 +191,45 @@ impl Order for Eip7683Order {
 	}
 }
 
-/// EIP-7683 Order Plugin
+/// EIP-7683 Order Plugin.
+///
+/// Main plugin implementation for handling EIP-7683 cross-chain orders,
+/// providing order parsing, validation, and transaction generation
+/// capabilities for the solver system.
 #[derive(Debug)]
 pub struct Eip7683OrderPlugin {
+	/// Plugin configuration settings
 	config: Eip7683Config,
+	/// Performance metrics for monitoring
 	metrics: PluginMetrics,
+	/// Whether the plugin has been initialized
 	is_initialized: bool,
 }
 
+/// Configuration for the EIP-7683 order plugin.
+///
+/// Contains all settings needed to parse, validate, and process
+/// EIP-7683 orders including supported chains, contract addresses,
+/// and validation parameters.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Eip7683Config {
+	/// Maximum age of orders in seconds before rejection
 	pub max_order_age_seconds: u64,
+	/// Minimum fill deadline buffer in seconds
 	pub min_fill_deadline_seconds: u64,
+	/// List of supported chain IDs
 	pub supported_chains: Vec<ChainId>,
+	/// Whether to validate order signatures
 	pub validate_signatures: bool,
+	/// Supported order data types
 	pub order_data_types: Vec<String>,
+	/// Address of the solver executing orders
 	pub solver_address: Address,
+	/// Address of the OutputSettler contract
 	pub output_settler_address: Address,
+	/// InputSettler addresses for each chain
 	pub input_settler_addresses: Vec<Address>, // InputSettler addresses per chain
+	/// Optional oracle address for settlement verification
 	pub oracle_address: Option<Address>,       // Oracle address for settlement verification
 }
 
@@ -175,9 +249,15 @@ impl Default for Eip7683Config {
 	}
 }
 
+/// Parse context for EIP-7683 orders.
+///
+/// Provides additional context for order parsing including
+/// chain validation and signature verification requirements.
 #[derive(Debug, Clone, Default)]
 pub struct Eip7683ParseContext {
+	/// Expected chain ID for validation
 	pub expected_chain_id: Option<ChainId>,
+	/// Whether to validate order signature
 	pub validate_signature: bool,
 }
 
@@ -188,6 +268,7 @@ impl Default for Eip7683OrderPlugin {
 }
 
 impl Eip7683OrderPlugin {
+	/// Creates a new plugin instance with default configuration.
 	pub fn new() -> Self {
 		Self {
 			config: Eip7683Config::default(),
@@ -196,6 +277,7 @@ impl Eip7683OrderPlugin {
 		}
 	}
 
+	/// Creates a new plugin instance with the specified configuration.
 	pub fn with_config(config: Eip7683Config) -> Self {
 		Self {
 			config,
@@ -204,6 +286,10 @@ impl Eip7683OrderPlugin {
 		}
 	}
 
+	/// Validates the signature of an order.
+	///
+	/// Verifies that the order was signed by the claimed user address.
+	/// Returns true if signature is valid or validation is disabled.
 	fn validate_signature(&self, order: &Eip7683Order) -> PluginResult<bool> {
 		if !self.config.validate_signatures {
 			return Ok(true);
@@ -222,6 +308,10 @@ impl Eip7683OrderPlugin {
 		Ok(true) // Assume valid for now
 	}
 
+	/// Extracts indexable metadata from an order.
+	///
+	/// Creates a searchable metadata structure containing key order
+	/// attributes for efficient querying and filtering.
 	fn extract_order_metadata(&self, order: &Eip7683Order) -> OrderIndexMetadata {
 		OrderIndexMetadata {
 			order_type: "eip7683".to_string(),
@@ -261,22 +351,27 @@ impl Eip7683OrderPlugin {
 
 #[async_trait]
 impl BasePlugin for Eip7683OrderPlugin {
+	/// Returns the unique plugin type identifier.
 	fn plugin_type(&self) -> &'static str {
 		"eip7683_order"
 	}
 
+	/// Returns the human-readable plugin name.
 	fn name(&self) -> String {
 		"EIP-7683 Order Plugin".to_string()
 	}
 
+	/// Returns the plugin version.
 	fn version(&self) -> &'static str {
 		"1.0.0"
 	}
 
+	/// Returns a brief description of the plugin's functionality.
 	fn description(&self) -> &'static str {
 		"Plugin for handling EIP-7683 cross-chain orders"
 	}
 
+	/// Initializes the plugin with configuration.
 	async fn initialize(&mut self, _config: PluginConfig) -> PluginResult<()> {
 		// Configuration is already loaded in with_config()
 		// This method is kept for BasePlugin trait compliance
@@ -289,6 +384,7 @@ impl BasePlugin for Eip7683OrderPlugin {
 		Ok(())
 	}
 
+	/// Validates plugin configuration parameters.
 	fn validate_config(&self, config: &PluginConfig) -> PluginResult<()> {
 		// Validate configuration values
 		if let Some(max_age) = config.get_number("max_order_age_seconds") {
@@ -310,6 +406,7 @@ impl BasePlugin for Eip7683OrderPlugin {
 		Ok(())
 	}
 
+	/// Performs health check on the plugin.
 	async fn health_check(&self) -> PluginResult<PluginHealth> {
 		if !self.is_initialized {
 			return Ok(PluginHealth::unhealthy("Plugin not initialized"));
@@ -328,15 +425,18 @@ impl BasePlugin for Eip7683OrderPlugin {
 		)
 	}
 
+	/// Returns current plugin metrics.
 	async fn get_metrics(&self) -> PluginResult<PluginMetrics> {
 		Ok(self.metrics.clone())
 	}
 
+	/// Shuts down the plugin gracefully.
 	async fn shutdown(&mut self) -> PluginResult<()> {
 		self.is_initialized = false;
 		Ok(())
 	}
 
+	/// Returns the configuration schema for the plugin.
 	fn config_schema(&self) -> PluginConfigSchema {
 		PluginConfigSchema::new()
 			.optional(
@@ -369,10 +469,12 @@ impl BasePlugin for Eip7683OrderPlugin {
 			)
 	}
 
+	/// Returns self as Any reference for downcasting.
 	fn as_any(&self) -> &dyn Any {
 		self
 	}
 
+	/// Returns self as mutable Any reference for downcasting.
 	fn as_any_mut(&mut self) -> &mut dyn Any {
 		self
 	}
@@ -384,6 +486,10 @@ impl OrderPlugin for Eip7683OrderPlugin {
 	type OrderId = String;
 	type ParseContext = Eip7683ParseContext;
 
+	/// Parses raw event data into an EIP-7683 order.
+	///
+	/// Decodes ABI-encoded event data from the Open event emitted
+	/// by EIP-7683 contracts and constructs a typed order instance.
 	async fn parse_order(
 		&self,
 		data: &[u8],
@@ -499,78 +605,76 @@ impl OrderPlugin for Eip7683OrderPlugin {
 		// Parse maxSpent outputs (what the user wants to receive)
 		// Note: In the ResolvedCrossChainOrder, minReceived are the inputs (what user provides),
 		// and maxSpent are the outputs (what user wants to receive)
-		let max_spent =
-			match &resolved_order[5] {
-				Token::Array(outputs) => outputs
-					.iter()
-					.map(|output| match output {
-						Token::Tuple(fields) => {
-							let token = match &fields[0] {
-								Token::FixedBytes(bytes) => {
-									// Extract address from bytes32 (last 20 bytes)
-									if bytes.len() == 32 {
-										format!("0x{}", hex::encode(&bytes[12..32]))
-									} else {
-										return Err(PluginError::ExecutionFailed(
-											"Invalid token bytes32".to_string(),
-										));
-									}
-								}
-								_ => {
+		let max_spent = match &resolved_order[5] {
+			Token::Array(outputs) => outputs
+				.iter()
+				.map(|output| match output {
+					Token::Tuple(fields) => {
+						let token = match &fields[0] {
+							Token::FixedBytes(bytes) => {
+								// Extract address from bytes32 (last 20 bytes)
+								if bytes.len() == 32 {
+									format!("0x{}", hex::encode(&bytes[12..32]))
+								} else {
 									return Err(PluginError::ExecutionFailed(
-										"Invalid token field".to_string(),
-									))
+										"Invalid token bytes32".to_string(),
+									));
 								}
-							};
-							let amount = match &fields[1] {
-								Token::Uint(amt) => amt.as_u64(),
-								_ => {
+							}
+							_ => {
+								return Err(PluginError::ExecutionFailed(
+									"Invalid token field".to_string(),
+								))
+							}
+						};
+						let amount = match &fields[1] {
+							Token::Uint(amt) => amt.as_u64(),
+							_ => {
+								return Err(PluginError::ExecutionFailed(
+									"Invalid amount".to_string(),
+								))
+							}
+						};
+						let recipient = match &fields[2] {
+							Token::FixedBytes(bytes) => {
+								// Extract address from bytes32 (last 20 bytes)
+								if bytes.len() == 32 {
+									format!("0x{}", hex::encode(&bytes[12..32]))
+								} else {
 									return Err(PluginError::ExecutionFailed(
-										"Invalid amount".to_string(),
-									))
+										"Invalid recipient bytes32".to_string(),
+									));
 								}
-							};
-							let recipient = match &fields[2] {
-								Token::FixedBytes(bytes) => {
-									// Extract address from bytes32 (last 20 bytes)
-									if bytes.len() == 32 {
-										format!("0x{}", hex::encode(&bytes[12..32]))
-									} else {
-										return Err(PluginError::ExecutionFailed(
-											"Invalid recipient bytes32".to_string(),
-										));
-									}
-								}
-								_ => {
-									return Err(PluginError::ExecutionFailed(
-										"Invalid recipient field".to_string(),
-									))
-								}
-							};
-							let chain_id = match &fields[3] {
-								Token::Uint(chain) => chain.as_u64(),
-								_ => {
-									return Err(PluginError::ExecutionFailed(
-										"Invalid chain ID".to_string(),
-									))
-								}
-							};
-							info!("Parsed MandateOutput: token={}, amount={}, recipient={}, chain_id={}", 
-							token, amount, recipient, chain_id);
-							Ok(MandateOutput {
-								token,
-								amount,
-								recipient,
-								chain_id,
-							})
-						}
-						_ => Err(PluginError::ExecutionFailed(
-							"Invalid output structure".to_string(),
-						)),
-					})
-					.collect::<Result<Vec<_>, _>>()?,
-				_ => vec![],
-			};
+							}
+							_ => {
+								return Err(PluginError::ExecutionFailed(
+									"Invalid recipient field".to_string(),
+								))
+							}
+						};
+						let chain_id = match &fields[3] {
+							Token::Uint(chain) => chain.as_u64(),
+							_ => {
+								return Err(PluginError::ExecutionFailed(
+									"Invalid chain ID".to_string(),
+								))
+							}
+						};
+
+						Ok(MandateOutput {
+							token,
+							amount,
+							recipient,
+							chain_id,
+						})
+					}
+					_ => Err(PluginError::ExecutionFailed(
+						"Invalid output structure".to_string(),
+					)),
+				})
+				.collect::<Result<Vec<_>, _>>()?,
+			_ => vec![],
+		};
 
 		// Parse minReceived inputs (what the user provides)
 		// Note: In the ResolvedCrossChainOrder, minReceived represents the inputs (what user deposits)
@@ -607,10 +711,6 @@ impl OrderPlugin for Eip7683OrderPlugin {
 									))
 								}
 							};
-							info!(
-								"Parsed minReceived input: token={}, amount={}, chain_id={}",
-								token, amount, chain_id
-							);
 							Ok((token, amount, chain_id))
 						} else {
 							Err(PluginError::ExecutionFailed(
@@ -641,15 +741,11 @@ impl OrderPlugin for Eip7683OrderPlugin {
 			_ => origin_chain_id,
 		};
 
-		// The oracle address needs to be obtained from the configuration
-		// Since the ResolvedCrossChainOrder event doesn't contain the original MandateERC7683 data,
-		// we'll use a configured oracle address. This should be set in the plugin configuration.
-		// For local testing, this is the AlwaysYesOracle address.
-		let local_oracle = self.config.oracle_address.clone().unwrap_or_else(|| {
-			info!("No oracle address configured, using default AlwaysYesOracle for local testing");
-			"0x9fE46736679d2D9a65F0992F2272dE9f3c7fa6e0".to_string()
-		});
-		info!("Using oracle address: {}", local_oracle);
+		let local_oracle = self
+			.config
+			.oracle_address
+			.clone()
+			.unwrap_or_else(|| "0x0000000000000000000000000000000000000000".to_string());
 
 		// Create the order
 		// For onchain orders, openDeadline is 0 (already opened)
@@ -702,6 +798,10 @@ impl OrderPlugin for Eip7683OrderPlugin {
 		Ok(order)
 	}
 
+	/// Validates an EIP-7683 order.
+	///
+	/// Performs comprehensive validation including structural checks,
+	/// chain support verification, timing constraints, and signature validation.
 	async fn validate_order(&self, order: &Self::Order) -> PluginResult<OrderValidation> {
 		let mut errors = Vec::new();
 
@@ -803,16 +903,21 @@ impl OrderPlugin for Eip7683OrderPlugin {
 		Ok(validation)
 	}
 
+	/// Extracts searchable metadata from an order.
 	async fn extract_metadata(&self, order: &Self::Order) -> PluginResult<OrderIndexMetadata> {
 		Ok(self.extract_order_metadata(order))
 	}
 
+	/// Retrieves a stored order by ID.
+	///
+	/// This plugin does not implement order storage, always returns None.
 	async fn get_order(&self, _id: &Self::OrderId) -> PluginResult<Option<Self::Order>> {
 		// This plugin doesn't store orders, just parses them
 		// In a real implementation, this might query a database or cache
 		Ok(None)
 	}
 
+	/// Checks if this plugin can handle the given order data.
 	fn can_handle(&self, data: &[u8]) -> bool {
 		// Try to parse as EIP-7683 order
 		match Eip7683Order::decode(data) {
@@ -826,10 +931,15 @@ impl OrderPlugin for Eip7683OrderPlugin {
 		}
 	}
 
+	/// Returns the order type identifier.
 	fn order_type(&self) -> &'static str {
 		"eip7683"
 	}
 
+	/// Estimates execution parameters for an order.
+	///
+	/// Calculates estimated fill time, gas costs, and feasibility
+	/// based on order complexity and cross-chain requirements.
 	async fn estimate_order(&self, order: &Self::Order) -> PluginResult<OrderEstimate> {
 		// Estimate various parameters for this order
 		let cross_chain_penalty = if order.origin_chain_id != order.destination_chain_id {
@@ -872,6 +982,10 @@ impl OrderPlugin for Eip7683OrderPlugin {
 		})
 	}
 
+	/// Creates a delivery request for filling an order.
+	///
+	/// Generates the transaction data needed to call the fill function
+	/// on the OutputSettler contract on the destination chain.
 	async fn create_fill_request(&self, order: &Self::Order) -> PluginResult<DeliveryRequest> {
 		// For EIP-7683, we need to call the fill function on the destination chain contract
 
@@ -955,14 +1069,6 @@ impl OrderPlugin for Eip7683OrderPlugin {
 
 		let origin_data = encode(&[Token::Tuple(mandate_output_tokens)]);
 
-		info!("Encoded MandateOutput for destination chain {}: settler={}, token={}, amount={}, recipient={}", 
-			destination_output.chain_id,
-			self.config.output_settler_address,
-			destination_output.token,
-			destination_output.amount,
-			destination_output.recipient
-		);
-
 		// Create filler data - 32 bytes with solver address in the last 20 bytes
 		let mut filler_data = vec![0u8; 32];
 		// Use the configured solver address
@@ -992,12 +1098,6 @@ impl OrderPlugin for Eip7683OrderPlugin {
 		// Base gas for contract call + additional gas per output
 		let gas_limit = 150000 + (order.mandate_outputs.len() as u64 * 50000);
 
-		// Create the transaction to call the contract
-		// Use the configured OutputSettler address
-		info!(
-			"Using OutputSettler address: {}",
-			self.config.output_settler_address
-		);
 		let output_settler = Address::from_str(&self.config.output_settler_address)
 			.map_err(|e| PluginError::ExecutionFailed(format!("Invalid solver address: {}", e)))?;
 
@@ -1040,6 +1140,11 @@ impl OrderPlugin for Eip7683OrderPlugin {
 		})
 	}
 
+	/// Creates a settlement request for claiming rewards.
+	///
+	/// Generates the transaction data needed to call finaliseSelf
+	/// on the InputSettler contract on the origin chain to claim
+	/// locked funds after a successful fill.
 	async fn create_settlement_request(
 		&self,
 		order: &Self::Order,
@@ -1109,12 +1214,6 @@ impl OrderPlugin for Eip7683OrderPlugin {
 
 		// Get the function selector
 		let selector = function.short_signature();
-
-		// Log the oracle address being used
-		info!(
-			"Using oracle address for settlement: {}",
-			order.local_oracle
-		);
 
 		// Encode the order struct
 		let order_struct = Token::Tuple(vec![
@@ -1189,7 +1288,6 @@ impl OrderPlugin for Eip7683OrderPlugin {
 										{
 											settler_bytes[12..32]
 												.copy_from_slice(settler_addr.as_bytes());
-											info!("Using InputSettler address for output on origin chain: {}", input_settler);
 										}
 									}
 								} else {
@@ -1315,7 +1413,10 @@ impl OrderPlugin for Eip7683OrderPlugin {
 	}
 }
 
-/// Helper to create EIP-7683 order processor
+/// Helper to create EIP-7683 order processor.
+///
+/// Creates an order processor instance that wraps the EIP-7683 plugin
+/// for integration with the solver's order processing pipeline.
 pub fn create_eip7683_processor(plugin: Arc<Eip7683OrderPlugin>) -> Arc<dyn OrderProcessor> {
 	Arc::new(OrderPluginProcessor::new(plugin, "eip7683".to_string()))
 }

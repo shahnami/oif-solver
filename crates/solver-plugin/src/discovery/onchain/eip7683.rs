@@ -1,4 +1,10 @@
-// solver-plugins/src/discovery/onchain/eip7683.rs
+//! # EIP-7683 On-chain Discovery Plugin
+//!
+//! Provides on-chain discovery for EIP-7683 cross-chain order events.
+//!
+//! This plugin monitors Ethereum-compatible blockchains for EIP-7683 order
+//! events including order creation (Open), completion (Finalised), and
+//! updates (OrderPurchased) from specified settler contracts.
 
 use async_trait::async_trait;
 use bytes::Bytes;
@@ -16,57 +22,88 @@ use tokio::sync::{mpsc, RwLock};
 use tokio::time::interval;
 use tracing::{debug, error, info, warn};
 
+/// State tracking for blockchain monitoring.
+///
+/// Maintains shared state between the monitoring task and the plugin
+/// instance for tracking progress and metrics.
 #[derive(Debug, Default)]
 struct MonitorState {
+	/// Current block being processed
 	current_block: Arc<RwLock<Option<u64>>>,
+	/// Target block to sync to
 	target_block: Arc<RwLock<Option<u64>>>,
+	/// Total events discovered
 	events_discovered: Arc<RwLock<u64>>,
+	/// Total errors encountered
 	errors_count: Arc<RwLock<u64>>,
+	/// Timestamp of last discovered event
 	last_event_timestamp: Arc<RwLock<Option<Timestamp>>>,
 }
 
-/// EIP-7683 on-chain discovery plugin using ethers-rs
+/// EIP-7683 on-chain discovery plugin implementation.
+///
+/// Monitors blockchain events from EIP-7683 settler contracts using
+/// ethers-rs for Ethereum RPC communication.
 #[derive(Debug)]
 pub struct Eip7683OnchainDiscoveryPlugin {
+	/// Plugin configuration
 	config: Eip7683OnchainConfig,
+	/// Ethereum RPC provider
 	provider: Option<Arc<Provider<Http>>>,
+	/// Plugin performance metrics
 	metrics: PluginMetrics,
+	/// Whether plugin is initialized
 	is_initialized: bool,
+	/// Whether monitoring is active
 	is_monitoring: bool,
 
-	// Discovery state
+	/// Discovery state tracking
 	state: MonitorState,
 
-	// Stop signal for monitoring
+	/// Channel to signal monitoring task to stop
 	stop_tx: Option<mpsc::UnboundedSender<()>>,
 
-	// Event filters
+	/// Active event filters
 	active_filters: Arc<RwLock<Vec<EventFilter>>>,
 }
 
+/// Configuration for EIP-7683 on-chain discovery.
+///
+/// Defines the blockchain connection parameters, contract addresses,
+/// and monitoring behavior for the discovery plugin.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Eip7683OnchainConfig {
+	/// Chain ID to monitor
 	pub chain_id: ChainId,
+	/// RPC endpoint URL
 	pub rpc_url: String,
+	/// Request timeout in milliseconds
 	pub timeout_ms: u64,
+	/// Maximum retry attempts for failed requests
 	pub max_retries: u32,
 
-	// Contract addresses to monitor
+	/// Input settler contract addresses to monitor
 	pub input_settler_addresses: Vec<String>,
+	/// Output settler contract addresses to monitor
 	pub output_settler_addresses: Vec<String>,
 
-	// Event configuration
+	/// Whether to monitor Open events (order creation)
 	pub monitor_open: bool,
+	/// Whether to monitor Finalised events (order completion)
 	pub monitor_finalised: bool,
+	/// Whether to monitor OrderPurchased events (order updates)
 	pub monitor_order_purchased: bool,
 
-	// Performance settings
+	/// Number of events to process in batch
 	pub batch_size: u32,
+	/// Block polling interval in milliseconds
 	pub poll_interval_ms: u64,
+	/// Maximum blocks to query per request
 	pub max_blocks_per_request: u64,
 
-	// Historical sync settings
+	/// Enable historical event synchronization
 	pub enable_historical_sync: bool,
+	/// Starting block for historical sync
 	pub historical_start_block: Option<u64>,
 }
 
@@ -103,6 +140,7 @@ impl Default for Eip7683OnchainDiscoveryPlugin {
 }
 
 impl Eip7683OnchainDiscoveryPlugin {
+	/// Create a new plugin instance with default configuration.
 	pub fn new() -> Self {
 		Self {
 			config: Eip7683OnchainConfig::default(),
@@ -116,6 +154,7 @@ impl Eip7683OnchainDiscoveryPlugin {
 		}
 	}
 
+	/// Create a new plugin instance with specified configuration.
 	pub fn with_config(config: Eip7683OnchainConfig) -> Self {
 		Self {
 			config,
@@ -129,8 +168,11 @@ impl Eip7683OnchainDiscoveryPlugin {
 		}
 	}
 
+	/// Setup the Ethereum RPC provider.
+	///
+	/// Establishes connection to the blockchain and verifies chain ID.
 	async fn setup_provider(&mut self) -> PluginResult<()> {
-		info!(
+		debug!(
 			"Setting up ethers provider for EIP-7683 discovery on chain {}",
 			self.config.chain_id
 		);
@@ -153,10 +195,12 @@ impl Eip7683OnchainDiscoveryPlugin {
 		}
 
 		self.provider = Some(Arc::new(provider));
-		info!("Provider setup complete for chain {}", self.config.chain_id);
 		Ok(())
 	}
 
+	/// Extract Ethereum addresses from configuration.
+	///
+	/// Parses and validates contract addresses for monitoring.
 	fn get_contract_addresses(config: &Eip7683OnchainConfig) -> Vec<EthAddress> {
 		let mut addresses = Vec::new();
 
@@ -181,6 +225,10 @@ impl Eip7683OnchainDiscoveryPlugin {
 		addresses
 	}
 
+	/// Generate event signatures for filtering.
+	///
+	/// Creates Keccak256 hashes of event signatures based on
+	/// which event types are enabled in configuration.
 	fn get_event_signatures(config: &Eip7683OnchainConfig) -> Vec<H256> {
 		let mut signatures = Vec::new();
 
@@ -205,6 +253,10 @@ impl Eip7683OnchainDiscoveryPlugin {
 		signatures
 	}
 
+	/// Create an Ethereum log filter for event discovery.
+	///
+	/// Constructs a filter with contract addresses, event signatures,
+	/// and block range for querying blockchain logs.
 	async fn create_filter(
 		config: &Eip7683OnchainConfig,
 		from_block: Option<u64>,
@@ -235,6 +287,10 @@ impl Eip7683OnchainDiscoveryPlugin {
 		filter
 	}
 
+	/// Parse blockchain log into a discovery event.
+	///
+	/// Converts raw Ethereum log data into a structured discovery
+	/// event with decoded parameters and metadata.
 	async fn parse_log_to_discovery_event(
 		config: &Eip7683OnchainConfig,
 		log: &Log,
@@ -354,6 +410,10 @@ impl Eip7683OnchainDiscoveryPlugin {
 		Ok(Some(discovery_event))
 	}
 
+	/// Decode event parameters based on event type.
+	///
+	/// Extracts and decodes specific parameters from the event data
+	/// based on the EIP-7683 event ABI definitions.
 	fn decode_event_params(data: &Bytes, event_type: &EventType) -> HashMap<String, EventParam> {
 		let mut params = HashMap::new();
 
@@ -457,7 +517,10 @@ impl Eip7683OnchainDiscoveryPlugin {
 		params
 	}
 
-	// Static method for the monitoring task
+	/// Background task for monitoring blockchain blocks.
+	///
+	/// Polls for new blocks and processes events, handling errors
+	/// and maintaining synchronization state.
 	async fn monitor_blocks_task(
 		provider: Arc<Provider<Http>>,
 		config: Eip7683OnchainConfig,
@@ -480,7 +543,7 @@ impl Eip7683OnchainDiscoveryPlugin {
 				.as_u64()
 		};
 
-		info!(
+		debug!(
 			"Starting block monitoring from block {}",
 			last_processed_block
 		);
@@ -517,7 +580,10 @@ impl Eip7683OnchainDiscoveryPlugin {
 		Ok(())
 	}
 
-	// Static method for processing blocks
+	/// Process new blocks for events.
+	///
+	/// Queries blockchain for logs in the specified block range and
+	/// converts discovered events into the solver's event format.
 	async fn process_new_blocks(
 		provider: &Provider<Http>,
 		config: &Eip7683OnchainConfig,
@@ -619,7 +685,7 @@ impl BasePlugin for Eip7683OnchainDiscoveryPlugin {
 	}
 
 	async fn initialize(&mut self, config: PluginConfig) -> PluginResult<()> {
-		info!("Initializing EIP-7683 on-chain discovery plugin");
+		debug!("Initializing EIP-7683 on-chain discovery plugin");
 
 		// Parse configuration
 		if let Some(chain_id) = config.get_number("chain_id") {
@@ -677,7 +743,7 @@ impl BasePlugin for Eip7683OnchainDiscoveryPlugin {
 		self.setup_provider().await?;
 
 		self.is_initialized = true;
-		info!("EIP-7683 on-chain discovery plugin initialized successfully");
+		debug!("EIP-7683 on-chain discovery plugin initialized successfully");
 		Ok(())
 	}
 
@@ -888,7 +954,7 @@ impl DiscoveryPlugin for Eip7683OnchainDiscoveryPlugin {
 			));
 		}
 
-		info!("Starting EIP-7683 on-chain monitoring");
+		debug!("Starting EIP-7683 on-chain monitoring");
 
 		// Create stop channel
 		let (stop_tx, stop_rx) = mpsc::unbounded_channel();
@@ -925,7 +991,6 @@ impl DiscoveryPlugin for Eip7683OnchainDiscoveryPlugin {
 		});
 
 		self.is_monitoring = true;
-		info!("EIP-7683 on-chain monitoring started");
 		Ok(())
 	}
 

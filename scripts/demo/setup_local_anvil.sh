@@ -1,5 +1,5 @@
 #!/bin/bash
-# setup_local_anvil.sh - Deploy local Anvil node with EIP-7683 contracts and tokens
+# setup_local_anvil.sh - Deploy dual-chain local Anvil setup with EIP-7683 contracts
 
 set -e
 
@@ -10,16 +10,28 @@ YELLOW='\033[1;33m'
 BLUE='\033[0;34m'
 NC='\033[0m' # No Color
 
-# Configuration
-CHAIN_ID=31337
-PORT=8545
+# Configuration - Origin Chain (where orders are created)
+ORIGIN_CHAIN_ID=31337
+ORIGIN_PORT=8545
+ORIGIN_RPC_URL="http://localhost:$ORIGIN_PORT"
+
+# Configuration - Destination Chain (where orders are fulfilled)
+DEST_CHAIN_ID=31338
+DEST_PORT=8546
+DEST_RPC_URL="http://localhost:$DEST_PORT"
+
+# Shared account keys (same across both chains)
 PRIVATE_KEY="0xac0974bec39a17e36ba4a6b4d238ff944bacb478cbed5efcae784d7bf4f2ff80"
 PUBLIC_KEY="0xf39Fd6e51aad88F6F4ce6aB8827279cffFb92266"
 USER_KEY="0x59c6995e998f97a5a0044966f0945389dc9e86dae88c7a8412f4603b6b78690d"
 USER_ADDR="0x70997970C51812dc3A010C7d01b50e0d17dc79C8"
+RECIPIENT_KEY="0x5de4111afa1a4b94908f83103eb1f1706367c2e68ca870fc3fb9a804cdab365a"
+RECIPIENT_ADDR="0x3C44CdDdB6a900fa2b585dd299e03d12FA4293BC"
 
-echo -e "${BLUE}🔧 Setting up Local Anvil with EIP-7683 Contracts${NC}"
-echo "================================================="
+echo -e "${BLUE}🔧 Setting up Dual-Chain Local Anvil with EIP-7683 Contracts${NC}"
+echo "============================================================"
+echo -e "${YELLOW}Origin Chain: $ORIGIN_RPC_URL (Chain ID: $ORIGIN_CHAIN_ID)${NC}"
+echo -e "${YELLOW}Destination Chain: $DEST_RPC_URL (Chain ID: $DEST_CHAIN_ID)${NC}"
 
 # Function to check if port is in use
 check_port() {
@@ -30,14 +42,20 @@ check_port() {
     fi
 }
 
-# Function to start anvil
-start_anvil() {
-    echo -e "${YELLOW}🚀 Starting Anvil on port $PORT...${NC}"
-    check_port $PORT
+# Function to start anvil instances
+start_anvil_chain() {
+    local chain_name=$1
+    local chain_id=$2
+    local port=$3
+    local pid_file="${chain_name}_anvil.pid"
+    local log_file="${chain_name}_anvil.log"
+    
+    echo -e "${YELLOW}🚀 Starting $chain_name Anvil on port $port (Chain ID: $chain_id)...${NC}"
+    check_port $port
     
     ~/.foundry/bin/anvil \
-        --chain-id $CHAIN_ID \
-        --port $PORT \
+        --chain-id $chain_id \
+        --port $port \
         --host 0.0.0.0 \
         --accounts 10 \
         --balance 10000 \
@@ -47,30 +65,79 @@ start_anvil() {
         --gas-price 1000000000 \
         --auto-impersonate \
         --block-time 2 \
-        > anvil.log 2>&1 &
+        > $log_file 2>&1 &
     
-    ANVIL_PID=$!
-    echo $ANVIL_PID > anvil.pid
+    local anvil_pid=$!
+    echo $anvil_pid > $pid_file
     
     # Wait for anvil to start
-    echo -e "${YELLOW}⏳ Waiting for Anvil to start...${NC}"
+    echo -e "${YELLOW}⏳ Waiting for $chain_name Anvil to start...${NC}"
     for i in {1..15}; do
         if curl -s -X POST -H "Content-Type: application/json" \
             --data '{"jsonrpc":"2.0","method":"eth_chainId","params":[],"id":1}' \
-            http://localhost:$PORT > /dev/null; then
-            echo -e "${GREEN}✅ Anvil started successfully${NC}"
+            http://localhost:$port > /dev/null; then
+            echo -e "${GREEN}✅ $chain_name Anvil started successfully${NC}"
             return 0
         fi
         sleep 1
     done
     
-    echo -e "${RED}❌ Failed to start Anvil${NC}"
+    echo -e "${RED}❌ Failed to start $chain_name Anvil${NC}"
     exit 1
+}
+
+# Function to start both chains
+start_anvil() {
+    start_anvil_chain "Origin" $ORIGIN_CHAIN_ID $ORIGIN_PORT
+    start_anvil_chain "Destination" $DEST_CHAIN_ID $DEST_PORT
+}
+
+# Function to deploy a token contract
+deploy_token() {
+    local chain_name=$1
+    local rpc_url=$2
+    
+    echo -e "${BLUE}🪙 Deploying TestToken on $chain_name chain...${NC}" >&2
+    local token_output=$(~/.foundry/bin/forge create /tmp/TestToken.sol:TestToken \
+        --rpc-url $rpc_url \
+        --private-key $PRIVATE_KEY \
+        --broadcast 2>&1)
+    
+    local token_address=$(echo "$token_output" | grep "Deployed to:" | awk '{print $3}')
+    if [ -z "$token_address" ]; then
+        echo -e "${RED}❌ Failed to deploy TestToken on $chain_name${NC}" >&2
+        echo "$token_output" >&2
+        exit 1
+    fi
+    echo -e "${GREEN}✅ TestToken deployed on $chain_name: $token_address${NC}" >&2
+    echo $token_address
+}
+
+# Function to deploy Permit2 (needed on both chains)
+deploy_permit2() {
+    local chain_name=$1
+    local rpc_url=$2
+    
+    echo -e "${BLUE}🔐 Deploying Permit2 on $chain_name chain...${NC}" >&2
+    local permit2_address="0x000000000022D473030F116dDEE9F6B43aC78BA3"
+    
+    # Check if Permit2 is already deployed
+    local permit2_code=$(~/.foundry/bin/cast code $permit2_address --rpc-url $rpc_url 2>/dev/null)
+    
+    if [ "$permit2_code" == "0x" ] || [ -z "$permit2_code" ]; then
+        cd lib/permit2
+        ~/.foundry/bin/forge build --use 0.8.17 > /dev/null 2>&1
+        local permit2_bytecode=$(cat out/Permit2.sol/Permit2.json | jq -r '.bytecode.object')
+        ~/.foundry/bin/cast rpc anvil_setCode $permit2_address $permit2_bytecode --rpc-url $rpc_url > /dev/null 2>&1
+        cd ../..
+    fi
+    echo -e "${GREEN}✅ Permit2 deployed on $chain_name: $permit2_address${NC}" >&2
+    echo $permit2_address
 }
 
 # Function to deploy contracts
 deploy_contracts() {
-    echo -e "${YELLOW}📋 Deploying EIP-7683 contracts...${NC}"
+    echo -e "${YELLOW}📋 Deploying EIP-7683 contracts on both chains...${NC}"
     
     # Clone oif-contracts if it doesn't exist
     if [ ! -d "oif-contracts" ]; then
@@ -133,154 +200,179 @@ contract TestToken {
 }
 EOF
 
-    echo -e "${BLUE}🪙 Deploying TestToken...${NC}"
-    TOKEN_OUTPUT=$(~/.foundry/bin/forge create /tmp/TestToken.sol:TestToken \
-        --rpc-url http://localhost:$PORT \
+    echo -e "${YELLOW}=== ORIGIN CHAIN DEPLOYMENT ====${NC}"
+    
+    # Deploy token on Origin chain
+    echo -e "${BLUE}🪙 Starting Origin token deployment...${NC}"
+    ORIGIN_TOKEN_ADDRESS=$(deploy_token "Origin" $ORIGIN_RPC_URL)
+    if [ -z "$ORIGIN_TOKEN_ADDRESS" ]; then
+        echo -e "${RED}❌ Failed to get Origin token address${NC}"
+        exit 1
+    fi
+    echo -e "${GREEN}🪙 Origin token address captured: $ORIGIN_TOKEN_ADDRESS${NC}"
+    
+    # Deploy Permit2 on Origin chain
+    ORIGIN_PERMIT2_ADDRESS=$(deploy_permit2 "Origin" $ORIGIN_RPC_URL)
+    
+    # Deploy The Compact on Origin chain
+    echo -e "${BLUE}🏦 Deploying The Compact on Origin chain...${NC}"
+    ORIGIN_COMPACT_OUTPUT=$(~/.foundry/bin/forge create lib/the-compact/src/TheCompact.sol:TheCompact \
+        --rpc-url $ORIGIN_RPC_URL \
         --private-key $PRIVATE_KEY \
         --broadcast 2>&1)
     
-    TOKEN_ADDRESS=$(echo "$TOKEN_OUTPUT" | grep "Deployed to:" | awk '{print $3}')
-    if [ -z "$TOKEN_ADDRESS" ]; then
-        echo -e "${RED}❌ Failed to deploy TestToken${NC}"
-        echo "$TOKEN_OUTPUT"
+    ORIGIN_COMPACT_ADDRESS=$(echo "$ORIGIN_COMPACT_OUTPUT" | grep "Deployed to:" | awk '{print $3}')
+    if [ -z "$ORIGIN_COMPACT_ADDRESS" ]; then
+        echo -e "${RED}❌ Failed to deploy The Compact on Origin${NC}"
+        echo "$ORIGIN_COMPACT_OUTPUT"
         exit 1
     fi
-    echo -e "${GREEN}✅ TestToken deployed: $TOKEN_ADDRESS${NC}"
+    echo -e "${GREEN}✅ The Compact deployed on Origin: $ORIGIN_COMPACT_ADDRESS${NC}"
 
-    echo -e "${BLUE}🏦 Deploying The Compact...${NC}"
-    COMPACT_OUTPUT=$(~/.foundry/bin/forge create lib/the-compact/src/TheCompact.sol:TheCompact \
-        --rpc-url http://localhost:$PORT \
-        --private-key $PRIVATE_KEY \
-        --broadcast 2>&1)
-    
-    COMPACT_ADDRESS=$(echo "$COMPACT_OUTPUT" | grep "Deployed to:" | awk '{print $3}')
-    if [ -z "$COMPACT_ADDRESS" ]; then
-        echo -e "${RED}❌ Failed to deploy The Compact${NC}"
-        echo "$COMPACT_OUTPUT"
-        exit 1
-    fi
-    echo -e "${GREEN}✅ The Compact deployed: $COMPACT_ADDRESS${NC}"
-
-    echo -e "${BLUE}🔐 Deploying Permit2...${NC}"
-    PERMIT2_ADDRESS="0x000000000022D473030F116dDEE9F6B43aC78BA3"
-    
-    # Check if Permit2 is already deployed
-    PERMIT2_CODE=$(~/.foundry/bin/cast code $PERMIT2_ADDRESS --rpc-url http://localhost:$PORT 2>/dev/null)
-    
-    if [ "$PERMIT2_CODE" == "0x" ] || [ -z "$PERMIT2_CODE" ]; then
-        cd lib/permit2
-        ~/.foundry/bin/forge build --use 0.8.17
-        PERMIT2_BYTECODE=$(cat out/Permit2.sol/Permit2.json | jq -r '.bytecode.object')
-        ~/.foundry/bin/cast rpc anvil_setCode $PERMIT2_ADDRESS $PERMIT2_BYTECODE --rpc-url http://localhost:$PORT
-        cd ../..
-    fi
-    echo -e "${GREEN}✅ Permit2 deployed: $PERMIT2_ADDRESS${NC}"
-
-    echo -e "${BLUE}🔮 Deploying AlwaysYesOracle...${NC}"
+    # Deploy Oracle on Origin chain
+    echo -e "${BLUE}🔮 Deploying AlwaysYesOracle on Origin chain...${NC}"
     ORACLE_OUTPUT=$(~/.foundry/bin/forge create test/mocks/AlwaysYesOracle.sol:AlwaysYesOracle \
-        --rpc-url http://localhost:$PORT \
+        --rpc-url $ORIGIN_RPC_URL \
         --private-key $PRIVATE_KEY \
         --broadcast 2>&1)
     
     ORACLE_ADDRESS=$(echo "$ORACLE_OUTPUT" | grep "Deployed to:" | awk '{print $3}')
     if [ -z "$ORACLE_ADDRESS" ]; then
-        echo -e "${RED}❌ Failed to deploy AlwaysYesOracle${NC}"
+        echo -e "${RED}❌ Failed to deploy AlwaysYesOracle on Origin${NC}"
         echo "$ORACLE_OUTPUT"
         exit 1
     fi
-    echo -e "${GREEN}✅ AlwaysYesOracle deployed: $ORACLE_ADDRESS${NC}"
+    echo -e "${GREEN}✅ AlwaysYesOracle deployed on Origin: $ORACLE_ADDRESS${NC}"
 
-    echo -e "${BLUE}⚖️ Deploying InputSettler7683...${NC}"
-    SETTLER_OUTPUT=$(~/.foundry/bin/forge create src/input/7683/InputSettler7683.sol:InputSettler7683 \
-        --rpc-url http://localhost:$PORT \
+    # Deploy InputSettler on Origin chain
+    echo -e "${BLUE}⚖️ Deploying InputSettler7683 on Origin chain...${NC}"
+    INPUT_SETTLER_OUTPUT=$(~/.foundry/bin/forge create src/input/7683/InputSettler7683.sol:InputSettler7683 \
+        --rpc-url $ORIGIN_RPC_URL \
         --private-key $PRIVATE_KEY \
         --broadcast 2>&1)
     
-    SETTLER_ADDRESS=$(echo "$SETTLER_OUTPUT" | grep "Deployed to:" | awk '{print $3}')
-    if [ -z "$SETTLER_ADDRESS" ]; then
-        echo -e "${RED}❌ Failed to deploy InputSettler7683${NC}"
-        echo "$SETTLER_OUTPUT"
+    INPUT_SETTLER_ADDRESS=$(echo "$INPUT_SETTLER_OUTPUT" | grep "Deployed to:" | awk '{print $3}')
+    if [ -z "$INPUT_SETTLER_ADDRESS" ]; then
+        echo -e "${RED}❌ Failed to deploy InputSettler7683 on Origin${NC}"
+        echo "$INPUT_SETTLER_OUTPUT"
         exit 1
     fi
-    echo -e "${GREEN}✅ InputSettler7683 deployed: $SETTLER_ADDRESS${NC}"
+    echo -e "${GREEN}✅ InputSettler7683 deployed on Origin: $INPUT_SETTLER_ADDRESS${NC}"
 
-    echo -e "${BLUE}⚖️ Deploying OutputSettler7683...${NC}"
+    echo -e "${YELLOW}=== DESTINATION CHAIN DEPLOYMENT ====${NC}"
+    
+    # Deploy token on Destination chain
+    echo -e "${BLUE}🪙 Starting Destination token deployment...${NC}"
+    DEST_TOKEN_ADDRESS=$(deploy_token "Destination" $DEST_RPC_URL)
+    if [ -z "$DEST_TOKEN_ADDRESS" ]; then
+        echo -e "${RED}❌ Failed to get Destination token address${NC}"
+        exit 1
+    fi
+    echo -e "${GREEN}🪙 Destination token address captured: $DEST_TOKEN_ADDRESS${NC}"
+    
+    # Deploy Permit2 on Destination chain
+    DEST_PERMIT2_ADDRESS=$(deploy_permit2 "Destination" $DEST_RPC_URL)
+
+    # Deploy OutputSettler on Destination chain
+    echo -e "${BLUE}⚖️ Deploying OutputSettler7683 on Destination chain...${NC}"
     OUTPUT_SETTLER_OUTPUT=$(~/.foundry/bin/forge create src/output/coin/OutputSettler7683.sol:OutputInputSettler7683 \
-        --rpc-url http://localhost:$PORT \
+        --rpc-url $DEST_RPC_URL \
         --private-key $PRIVATE_KEY \
         --broadcast 2>&1)
     
     OUTPUT_SETTLER_ADDRESS=$(echo "$OUTPUT_SETTLER_OUTPUT" | grep "Deployed to:" | awk '{print $3}')
     if [ -z "$OUTPUT_SETTLER_ADDRESS" ]; then
-        echo -e "${RED}❌ Failed to deploy OutputSettler7683${NC}"
+        echo -e "${RED}❌ Failed to deploy OutputSettler7683 on Destination${NC}"
         echo "$OUTPUT_SETTLER_OUTPUT"
         exit 1
     fi
-    echo -e "${GREEN}✅ OutputSettler7683 deployed: $OUTPUT_SETTLER_ADDRESS${NC}"
+    echo -e "${GREEN}✅ OutputSettler7683 deployed on Destination: $OUTPUT_SETTLER_ADDRESS${NC}"
 
     cd ..
     rm -f /tmp/TestToken.sol
     
-    # Store contract addresses
-    export TOKEN_ADDRESS
-    export COMPACT_ADDRESS  
-    export PERMIT2_ADDRESS
+    # Store contract addresses for both chains
+    export ORIGIN_TOKEN_ADDRESS
+    export ORIGIN_PERMIT2_ADDRESS
+    export ORIGIN_COMPACT_ADDRESS
     export ORACLE_ADDRESS
-    export SETTLER_ADDRESS
+    export INPUT_SETTLER_ADDRESS
+    
+    export DEST_TOKEN_ADDRESS
+    export DEST_PERMIT2_ADDRESS
     export OUTPUT_SETTLER_ADDRESS
 }
 
 # Function to mint tokens and setup
 setup_tokens() {
-    echo -e "${YELLOW}💰 Minting tokens and setting up accounts...${NC}"
+    echo -e "${YELLOW}💰 Minting tokens and setting up accounts on both chains...${NC}"
     
-    # Mint tokens to user (for deposits)
-    ~/.foundry/bin/cast send $TOKEN_ADDRESS \
+    echo -e "${YELLOW}=== ORIGIN CHAIN TOKEN SETUP ====${NC}"
+    echo -e "${BLUE}🔍 Using Origin token address: $ORIGIN_TOKEN_ADDRESS${NC}"
+    
+    if [ -z "$ORIGIN_TOKEN_ADDRESS" ]; then
+        echo -e "${RED}❌ Origin token address is empty! Cannot proceed with token setup.${NC}"
+        exit 1
+    fi
+    
+    # Mint tokens to user on Origin chain (for deposits)
+    ~/.foundry/bin/cast send $ORIGIN_TOKEN_ADDRESS \
         "mint(address,uint256)" \
         $USER_ADDR \
         "100000000000000000000" \
-        --rpc-url http://localhost:$PORT \
+        --rpc-url $ORIGIN_RPC_URL \
         --private-key $PRIVATE_KEY \
         > /dev/null 2>&1
     
-    # Mint tokens to solver (for liquidity)
-    ~/.foundry/bin/cast send $TOKEN_ADDRESS \
+    echo -e "${GREEN}✅ Origin chain tokens minted:${NC}"
+    echo -e "   User ($USER_ADDR): 100 TEST"
+    
+    echo -e "${YELLOW}=== DESTINATION CHAIN TOKEN SETUP ====${NC}"
+    echo -e "${BLUE}🔍 Using Destination token address: $DEST_TOKEN_ADDRESS${NC}"
+    
+    if [ -z "$DEST_TOKEN_ADDRESS" ]; then
+        echo -e "${RED}❌ Destination token address is empty! Cannot proceed with token setup.${NC}"
+        exit 1
+    fi
+    
+    
+    # Mint tokens to solver on Destination chain (for liquidity/fulfillment)
+    ~/.foundry/bin/cast send $DEST_TOKEN_ADDRESS \
         "mint(address,uint256)" \
         $PUBLIC_KEY \
         "100000000000000000000" \
-        --rpc-url http://localhost:$PORT \
+        --rpc-url $DEST_RPC_URL \
         --private-key $PRIVATE_KEY \
         > /dev/null 2>&1
     
-    echo -e "${GREEN}✅ Tokens minted:${NC}"
-    echo -e "   User ($USER_ADDR): 100 TEST"
+    echo -e "${GREEN}✅ Destination chain tokens minted:${NC}"
     echo -e "   Solver ($PUBLIC_KEY): 100 TEST"
     
-    # Approve OutputSettler to spend solver's tokens
+    # Approve OutputSettler to spend solver's tokens on destination chain
     echo -e "${YELLOW}💰 Approving OutputSettler to spend solver's tokens...${NC}"
-    ~/.foundry/bin/cast send $TOKEN_ADDRESS \
+    ~/.foundry/bin/cast send $DEST_TOKEN_ADDRESS \
         "approve(address,uint256)" \
         $OUTPUT_SETTLER_ADDRESS \
         "1000000000000000000000000" \
-        --rpc-url http://localhost:$PORT \
+        --rpc-url $DEST_RPC_URL \
         --private-key $PRIVATE_KEY \
         > /dev/null 2>&1
     
-    echo -e "${GREEN}✅ OutputSettler approved to spend solver's tokens${NC}"
+    echo -e "${GREEN}✅ OutputSettler approved to spend solver's tokens on destination chain${NC}"
 }
 
 # Function to create configuration
 create_config() {
-    echo -e "${YELLOW}📝 Creating solver configuration...${NC}"
+    echo -e "${YELLOW}📝 Creating dual-chain solver configuration...${NC}"
     
     mkdir -p config
     
     cat > config/local.toml << EOF
-# Local development configuration for OIF Solver
+# Local dual-chain development configuration for OIF Solver
 
 # Main solver settings
 [solver]
-name = "oif-solver-local"
+name = "oif-solver-local-dual-chain"
 log_level = "debug"
 http_port = 8080
 metrics_port = 9090
@@ -288,35 +380,54 @@ metrics_port = 9090
 # Plugin configuration
 [plugins]
 
-# Discovery plugins
-[plugins.discovery.local_discovery]
+# Discovery plugins - Origin chain (where orders are created)
+[plugins.discovery.origin_discovery]
 enabled = true
 plugin_type = "eip7683_onchain"
 
-[plugins.discovery.local_discovery.config]
-chain_id = $CHAIN_ID
-rpc_url = "http://localhost:$PORT"
+[plugins.discovery.origin_discovery.config]
+chain_id = $ORIGIN_CHAIN_ID
+rpc_url = "$ORIGIN_RPC_URL"
 timeout_ms = 30000
 poll_interval_ms = 3000
 batch_size = 100
-# Local test contracts
-input_settler_addresses = ["$SETTLER_ADDRESS"]
-output_settler_addresses = ["$OUTPUT_SETTLER_ADDRESS"]
-# Event monitoring
+# Origin chain contracts
+input_settler_addresses = ["$INPUT_SETTLER_ADDRESS"]
+# Event monitoring - only monitor Open events on origin
 monitor_open = true
+monitor_finalised = false
+monitor_order_purchased = false
+# No historical sync for local dev
+enable_historical_sync = false
+
+# Discovery plugins - Destination chain (where fills are confirmed)
+[plugins.discovery.dest_discovery]
+enabled = true
+plugin_type = "eip7683_onchain"
+
+[plugins.discovery.dest_discovery.config]
+chain_id = $DEST_CHAIN_ID
+rpc_url = "$DEST_RPC_URL"
+timeout_ms = 30000
+poll_interval_ms = 3000
+batch_size = 100
+# Destination chain contracts
+output_settler_addresses = ["$OUTPUT_SETTLER_ADDRESS"]
+# Event monitoring - only monitor fills and settlements on destination
+monitor_open = false
 monitor_finalised = true
 monitor_order_purchased = true
 # No historical sync for local dev
 enable_historical_sync = false
 
-# Delivery plugins
-[plugins.delivery.local_delivery]
+# Delivery plugins - Origin chain
+[plugins.delivery.origin_delivery]
 enabled = true
 plugin_type = "evm_ethers"
 
-[plugins.delivery.local_delivery.config]
-chain_id = $CHAIN_ID
-rpc_url = "http://localhost:$PORT"
+[plugins.delivery.origin_delivery.config]
+chain_id = $ORIGIN_CHAIN_ID
+rpc_url = "$ORIGIN_RPC_URL"
 # Hardhat test account #0
 private_key = "$PRIVATE_KEY"
 max_retries = 3
@@ -324,6 +435,30 @@ timeout_ms = 30000
 enable_eip1559 = true
 nonce_management = true
 max_pending_transactions = 10
+# Origin chain contracts
+token_address = "$ORIGIN_TOKEN_ADDRESS"
+input_settler_address = "$INPUT_SETTLER_ADDRESS"
+permit2_address = "$ORIGIN_PERMIT2_ADDRESS"
+
+# Delivery plugins - Destination chain
+[plugins.delivery.dest_delivery]
+enabled = true
+plugin_type = "evm_ethers"
+
+[plugins.delivery.dest_delivery.config]
+chain_id = $DEST_CHAIN_ID
+rpc_url = "$DEST_RPC_URL"
+# Hardhat test account #0
+private_key = "$PRIVATE_KEY"
+max_retries = 3
+timeout_ms = 30000
+enable_eip1559 = true
+nonce_management = true
+max_pending_transactions = 10
+# Destination chain contracts
+token_address = "$DEST_TOKEN_ADDRESS"
+output_settler_address = "$OUTPUT_SETTLER_ADDRESS"
+permit2_address = "$DEST_PERMIT2_ADDRESS"
 
 # State plugins
 [plugins.state.memory_state]
@@ -333,6 +468,15 @@ plugin_type = "memory"
 [plugins.state.memory_state.config]
 max_entries = 1000
 
+[plugins.state.file_state]
+enabled = true
+plugin_type = "file"
+
+[plugins.state.file_state.config]
+storage_path = "./data"
+create_dirs = true
+sync_on_write = true
+
 # Order plugins
 [plugins.order.eip7683_order]
 enabled = true
@@ -341,7 +485,10 @@ plugin_type = "eip7683_order"
 [plugins.order.eip7683_order.config]
 solver_address = "$PUBLIC_KEY"
 output_settler_address = "$OUTPUT_SETTLER_ADDRESS"
-input_settler_addresses = ["$SETTLER_ADDRESS"]
+input_settler_addresses = ["$INPUT_SETTLER_ADDRESS"]
+oracle_address = "$ORACLE_ADDRESS"
+origin_token_address = "$ORIGIN_TOKEN_ADDRESS"
+destination_token_address = "$DEST_TOKEN_ADDRESS"
 max_order_age_seconds = 86400
 min_fill_deadline_seconds = 300
 validate_signatures = false  # Disable for local testing
@@ -361,93 +508,128 @@ claim_window_seconds = 86400  # 24 hours
 [delivery]
 strategy = "RoundRobin"
 fallback_enabled = false
-max_parallel_attempts = 1
+max_parallel_attempts = 2  # Can process on both chains
 
 # Settlement configuration
 [settlement]
 default_strategy = "direct_settlement"
 fallback_strategies = []
 profit_threshold_wei = "0"  # No profit requirement for testing
+monitor_interval_seconds = 10  # Check fills every 10 seconds
 
 # Discovery configuration
 [discovery]
 realtime_monitoring = true
 max_events_per_second = 1000
-max_concurrent_sources = 10
+max_concurrent_sources = 2  # Both chains
 
 # State configuration
 [state]
-default_backend = "memory_state"
+default_backend = "file_state"
 enable_metrics = true
 cleanup_interval_seconds = 300  # 5 minutes
 max_concurrent_operations = 100
 
 # Contract addresses for testing
-[contracts]
-token = "$TOKEN_ADDRESS"
-input_settler = "$SETTLER_ADDRESS"
-output_settler = "$OUTPUT_SETTLER_ADDRESS"
-the_compact = "$COMPACT_ADDRESS"
-permit2 = "$PERMIT2_ADDRESS"
+[contracts.origin]
+chain_id = $ORIGIN_CHAIN_ID
+rpc_url = "$ORIGIN_RPC_URL"
+token = "$ORIGIN_TOKEN_ADDRESS"
+input_settler = "$INPUT_SETTLER_ADDRESS"
+the_compact = "$ORIGIN_COMPACT_ADDRESS"
+permit2 = "$ORIGIN_PERMIT2_ADDRESS"
 oracle = "$ORACLE_ADDRESS"
+
+[contracts.destination]
+chain_id = $DEST_CHAIN_ID
+rpc_url = "$DEST_RPC_URL"
+token = "$DEST_TOKEN_ADDRESS"
+output_settler = "$OUTPUT_SETTLER_ADDRESS"
+permit2 = "$DEST_PERMIT2_ADDRESS"
 
 # Test accounts
 [accounts]
 solver = "$PUBLIC_KEY"
 user = "$USER_ADDR"
 user_private_key = "$USER_KEY"
+recipient = "$RECIPIENT_ADDR"  # Account #2 - recipient for cross-chain intents
 EOF
 
     cat > .env << EOF
-# Local development environment
-ETH_RPC_URL=http://localhost:$PORT
+# Local dual-chain development environment
+ORIGIN_RPC_URL=$ORIGIN_RPC_URL
+DEST_RPC_URL=$DEST_RPC_URL
 ETH_PRIVATE_KEY=$PRIVATE_KEY
 RUST_LOG=debug
 EOF
 
-    echo -e "${GREEN}✅ Configuration created${NC}"
+    echo -e "${GREEN}✅ Dual-chain configuration created${NC}"
     echo -e "   Config: config/local.toml"
     echo -e "   Environment: .env"
 }
 
 # Function to display summary
 show_summary() {
-    echo -e "\n${GREEN}🎉 Local Anvil Setup Complete${NC}"
-    echo "=============================="
-    echo -e "${BLUE}Network:${NC} http://localhost:$PORT (Chain ID: $CHAIN_ID)"
+    echo -e "\n${GREEN}🎉 Dual-Chain Local Anvil Setup Complete${NC}"
+    echo "=========================================="
     echo ""
-    echo -e "${BLUE}📋 Contract Addresses:${NC}"
-    echo -e "   TestToken:         $TOKEN_ADDRESS"
-    echo -e "   InputSettler7683:  $SETTLER_ADDRESS"
-    echo -e "   OutputSettler7683: $OUTPUT_SETTLER_ADDRESS"
-    echo -e "   The Compact:       $COMPACT_ADDRESS"
-    echo -e "   Permit2:           $PERMIT2_ADDRESS"
+    echo -e "${BLUE}🔗 Networks:${NC}"
+    echo -e "   Origin Chain:      $ORIGIN_RPC_URL (Chain ID: $ORIGIN_CHAIN_ID)"
+    echo -e "   Destination Chain: $DEST_RPC_URL (Chain ID: $DEST_CHAIN_ID)"
+    echo ""
+    echo -e "${BLUE}📋 Origin Chain Contracts:${NC}"
+    echo -e "   TestToken:         $ORIGIN_TOKEN_ADDRESS"
+    echo -e "   InputSettler7683:  $INPUT_SETTLER_ADDRESS"
+    echo -e "   The Compact:       $ORIGIN_COMPACT_ADDRESS"
+    echo -e "   Permit2:           $ORIGIN_PERMIT2_ADDRESS"
     echo -e "   AlwaysYesOracle:   $ORACLE_ADDRESS"
     echo ""
-    echo -e "${BLUE}👥 Test Accounts:${NC}"
-    echo -e "   Solver:  $PUBLIC_KEY (100 TEST + 10,000 ETH)"
-    echo -e "   User:    $USER_ADDR (100 TEST + 10,000 ETH)"
+    echo -e "${BLUE}📋 Destination Chain Contracts:${NC}"
+    echo -e "   TestToken:         $DEST_TOKEN_ADDRESS"
+    echo -e "   OutputSettler7683: $OUTPUT_SETTLER_ADDRESS"
+    echo -e "   Permit2:           $DEST_PERMIT2_ADDRESS"
+    echo ""
+    echo -e "${BLUE}👥 Test Accounts (on both chains):${NC}"
+    echo -e "   Solver:  $PUBLIC_KEY (100 TEST + 10,000 ETH each chain)"
+    echo -e "   User:    $USER_ADDR (100 TEST + 10,000 ETH each chain)"
     echo ""
     echo -e "${YELLOW}📚 Next Steps:${NC}"
-    echo -e "   1. Start solver: ${BLUE}cargo run --bin solver-service${NC}"
-    echo -e "   2. Send intent:  ${BLUE}./send_intent.sh${NC}"
+    echo -e "   1. Start solver: ${BLUE}cargo run --bin solver-service -- --config config/local.toml${NC}"
+    echo -e "   2. Send intent:  ${BLUE}./send_intent.sh${NC} (will create cross-chain order)"
     echo -e "   3. Monitor:      ${BLUE}./monitor_api.sh${NC}"
     echo ""
-    echo -e "${YELLOW}🛑 To stop Anvil:${NC} kill \$(cat anvil.pid) or Ctrl+C"
+    echo -e "${YELLOW}🛑 To stop Anvil:${NC} kill \$(cat origin_anvil.pid) \$(cat destination_anvil.pid) or Ctrl+C"
 }
 
 # Function to cleanup
 cleanup() {
-    echo -e "\n${YELLOW}🧹 Cleaning up...${NC}"
-    if [ -f anvil.pid ]; then
-        ANVIL_PID=$(cat anvil.pid)
-        if kill -0 $ANVIL_PID 2>/dev/null; then
-            echo -e "${BLUE}🛑 Stopping Anvil (PID: $ANVIL_PID)...${NC}"
-            kill $ANVIL_PID
+    echo -e "\n${YELLOW}🧹 Cleaning up both chains...${NC}"
+    
+    # Cleanup Origin chain
+    if [ -f Origin_anvil.pid ]; then
+        ORIGIN_PID=$(cat Origin_anvil.pid)
+        if kill -0 $ORIGIN_PID 2>/dev/null; then
+            echo -e "${BLUE}🛑 Stopping Origin Anvil (PID: $ORIGIN_PID)...${NC}"
+            kill $ORIGIN_PID
         fi
-        rm -f anvil.pid
+        rm -f Origin_anvil.pid
     fi
+    
+    # Cleanup Destination chain
+    if [ -f Destination_anvil.pid ]; then
+        DEST_PID=$(cat Destination_anvil.pid)
+        if kill -0 $DEST_PID 2>/dev/null; then
+            echo -e "${BLUE}🛑 Stopping Destination Anvil (PID: $DEST_PID)...${NC}"
+            kill $DEST_PID
+        fi
+        rm -f Destination_anvil.pid
+    fi
+    
+    # Kill any remaining anvil processes
+    pkill -f "anvil.*--port.*$ORIGIN_PORT" || true
+    pkill -f "anvil.*--port.*$DEST_PORT" || true
     pkill -f anvil || true
+    
     echo -e "${GREEN}✅ Cleanup complete${NC}"
 }
 
@@ -471,7 +653,7 @@ case "${1:-setup}" in
         show_summary
         
         # Keep running
-        echo -e "${BLUE}📡 Anvil is running. Press Ctrl+C to stop...${NC}"
+        echo -e "${BLUE}📡 Both Anvil chains are running. Press Ctrl+C to stop...${NC}"
         while true; do
             sleep 10
         done
@@ -480,33 +662,49 @@ case "${1:-setup}" in
         cleanup
         ;;
     "status")
-        if [ -f anvil.pid ] && kill -0 $(cat anvil.pid) 2>/dev/null; then
-            echo -e "${GREEN}✅ Anvil is running (PID: $(cat anvil.pid))${NC}"
-            if [ -f config/local.toml ]; then
-                show_summary
-            fi
+        origin_running=false
+        dest_running=false
+        
+        if [ -f Origin_anvil.pid ] && kill -0 $(cat Origin_anvil.pid) 2>/dev/null; then
+            echo -e "${GREEN}✅ Origin Anvil is running (PID: $(cat Origin_anvil.pid))${NC}"
+            origin_running=true
         else
-            echo -e "${RED}❌ Anvil is not running${NC}"
+            echo -e "${RED}❌ Origin Anvil is not running${NC}"
+        fi
+        
+        if [ -f Destination_anvil.pid ] && kill -0 $(cat Destination_anvil.pid) 2>/dev/null; then
+            echo -e "${GREEN}✅ Destination Anvil is running (PID: $(cat Destination_anvil.pid))${NC}"
+            dest_running=true
+        else
+            echo -e "${RED}❌ Destination Anvil is not running${NC}"
+        fi
+        
+        if [ "$origin_running" = true ] && [ "$dest_running" = true ] && [ -f config/local.toml ]; then
+            show_summary
         fi
         ;;
     "contracts")
-        if curl -s http://localhost:$PORT > /dev/null; then
+        if curl -s $ORIGIN_RPC_URL > /dev/null && curl -s $DEST_RPC_URL > /dev/null; then
             deploy_contracts
             setup_tokens
             create_config
             show_summary
         else
-            echo -e "${RED}❌ Anvil is not running. Run './setup_local_anvil.sh' first${NC}"
+            echo -e "${RED}❌ Both Anvil chains are not running. Run './setup_local_anvil.sh' first${NC}"
         fi
         ;;
     *)
         echo "Usage: $0 [setup|stop|status|contracts]"
         echo ""
         echo "Commands:"
-        echo "  setup (default) - Start Anvil and deploy all contracts"
-        echo "  stop            - Stop Anvil and cleanup"
-        echo "  status          - Check if Anvil is running"
-        echo "  contracts       - Only deploy contracts (if Anvil is running)"
+        echo "  setup (default) - Start dual-chain Anvil setup and deploy all contracts"
+        echo "  stop            - Stop both Anvil chains and cleanup"
+        echo "  status          - Check if both Anvil chains are running"
+        echo "  contracts       - Only deploy contracts (if both chains are running)"
+        echo ""
+        echo "Dual-Chain Setup:"
+        echo "  Origin Chain (port 8545):      InputSettler, Oracle, Token, TheCompact"
+        echo "  Destination Chain (port 8546): OutputSettler, Token"
         exit 1
         ;;
 esac

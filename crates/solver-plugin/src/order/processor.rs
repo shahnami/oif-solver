@@ -1,4 +1,10 @@
-// solver-plugin/src/order/processor.rs
+//! # Order Processor Adapter
+//!
+//! Provides an adapter implementation that bridges OrderPlugin instances
+//! with the OrderProcessor interface required by the solver's delivery system.
+//!
+//! This module enables order plugins to process blockchain events and generate
+//! appropriate transaction requests for both order fills and settlements.
 
 use async_trait::async_trait;
 use solver_types::events::{FillEvent, OrderEvent};
@@ -11,12 +17,18 @@ use solver_types::plugins::{
 use solver_types::{DeliveryPriority, Order, OrderProcessor, SettlementPriority};
 use std::sync::Arc;
 
-/// Adapter that wraps an OrderPlugin to work as an OrderProcessor
+/// Adapter that wraps an OrderPlugin to work as an OrderProcessor.
+///
+/// This struct bridges the gap between the plugin system's OrderPlugin trait
+/// and the solver's OrderProcessor trait, allowing plugins to participate in
+/// the order processing pipeline without implementing OrderProcessor directly.
 pub struct OrderPluginProcessor<P>
 where
 	P: OrderPlugin + Send + Sync,
 {
+	/// The wrapped order plugin instance
 	plugin: Arc<P>,
+	/// Source prefix for filtering events this processor can handle
 	source_prefix: String,
 }
 
@@ -24,6 +36,11 @@ impl<P> OrderPluginProcessor<P>
 where
 	P: OrderPlugin + Send + Sync,
 {
+	/// Creates a new order processor adapter.
+	///
+	/// Wraps the provided order plugin to make it compatible with the
+	/// OrderProcessor interface. The source_prefix is used to filter
+	/// events that this processor should handle.
 	pub fn new(plugin: Arc<P>, source_prefix: String) -> Self {
 		Self {
 			plugin,
@@ -39,6 +56,11 @@ where
 	P::Order: 'static,
 	P::ParseContext: Default + 'static,
 {
+	/// Processes an order event to generate a fill transaction.
+	///
+	/// Takes a discovered order event, parses and validates the order data,
+	/// then creates a transaction request for filling the order on the
+	/// destination chain.
 	async fn process_order_event(
 		&self,
 		event: &OrderEvent,
@@ -106,6 +128,11 @@ where
 		Ok(Some(transaction_request))
 	}
 
+	/// Processes a fill event to generate a settlement transaction.
+	///
+	/// Takes a fill completion event and creates a transaction request
+	/// for claiming rewards or settling the order on the origin chain.
+	/// Returns None if the order type doesn't support settlement.
 	async fn process_fill_event(
 		&self,
 		event: &FillEvent,
@@ -160,6 +187,10 @@ where
 		}
 	}
 
+	/// Checks if this processor can handle events from the given source.
+	///
+	/// Returns true if the source string starts with this processor's
+	/// configured source prefix.
 	fn can_handle_source(&self, source: &str) -> bool {
 		source.starts_with(&self.source_prefix)
 	}

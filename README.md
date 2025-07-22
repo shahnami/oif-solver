@@ -16,117 +16,104 @@ The OIF Solver is designed to:
 
 ```
 ┌─────────────────────────────────────────────────────────────────────────────────────────┐
-│                                     External Services                                   │
+│                                 External Sources                                        │
 │  ┌──────────────┐  ┌──────────────┐  ┌──────────────┐  ┌─────────────┐  ┌────────────┐  │
-│  │  Blockchain  │  │   Off-chain  │  │   Liquidity  │  │   Price     │  │  External  │  │
-│  │    Nodes     │  │   Intent     │  │   Sources    │  │   Oracles   │  │  Settlers  │  │
-│  │  (EVM, etc)  │  │   Sources    │  │  (DEX, AMM)  │  │  (APIs)     │  │  (Relays)  │  │
-│  └──────┬───────┘  └──────┬───────┘  └──────┬───────┘  └──────┬──────┘  └─────┬──────┘  │
-└─────────┼─────────────────┼─────────────────┼─────────────────┼───────────────┼─────────┘
-          │                 │                 │                 │               │
-┌─────────┼─────────────────┼─────────────────┼─────────────────┼───────────────┼─────────┐
-│         ▼                 ▼                 ▼                 ▼               ▼         │
+│  │  Blockchain  │  │   Off-chain  │  │    Oracle    │  │  Settlement │  │  External  │  │
+│  │    Nodes     │  │   Intent     │  │ Attestation  │  │  Contracts  │  │    APIs    │  │
+│  │  (EVM, etc)  │  │   Sources    │  │  Services    │  │   (claims)   │  │            │  │
+│  └──────┬───────┘  └──────┬───────┘  └──────┬───────┘  └──────┬──────┘  └──────┬─────┘  │
+└─────────┼─────────────────┼─────────────────┼─────────────────┼───────────────────┼─────┘
+          │                 │                 │                 │                   │
+┌─────────┼─────────────────┼─────────────────┼─────────────────┼───────────────────┼─────┐
+│         ▼                 ▼                 ▼                 ▼                   ▼     │
 │  ┌─────────────────────────────────────────────────────────────────────────────────┐    │
-│  │                           solver-service (HTTP API Layer)                       │    │
+│  │                      solver-service (API & Main Binary)                        │    │
 │  │  ┌─────────────┐  ┌──────────────┐  ┌─────────────┐  ┌───────────────────────┐  │    │
-│  │  │    /api     │  │   /health    │  │  /metrics   │  │   CLI Arguments       │  │    │
-│  │  │  REST API   │  │ Health Check │  │ Prometheus  │  │  --config, --log      │  │    │
-│  │  └──────┬──────┘  └──────────────┘  └─────────────┘  └───────────────────────┘  │    │
-│  └─────────┼───────────────────────────────────────────────────────────────────────┘    │
-│            │                                                                            │
-│            ▼                                                                            │
+│  │  │  /health    │  │    /api      │  │  /metrics   │  │   CLI & Signal        │  │    │
+│  │  │ /health/*   │  │   /admin     │  │ (Prometheus)│  │     Handling          │  │    │
+│  │  └─────────────┘  └──────────────┘  └─────────────┘  └───────────────────────┘  │    │
+│  └─────────────────────────────────────────────────────────────────────────────────┘    │
+│                                      │                                                  │
+│                                      ▼                                                  │
 │  ┌─────────────────────────────────────────────────────────────────────────────────┐    │
-│  │                        solver-core (Orchestration Engine)                       │    │
-│  │  ┌────────────────┐     ┌──────────────────┐     ┌────────────────────────────┐ │    │
-│  │  │ SolverEngine   │◄────┤ SolverCoordinator├────►│    OrderProcessor          │ │    │
-│  │  │                │     │                  │     │ - Validate                 │ │    │
-│  │  │ - Execute      │     │ - Route Orders   │     │ - Route                    │ │    │
-│  │  │ - Track State  │     │ - Manage State   │     │ - Execute                  │ │    │
-│  │  └───────┬────────┘     └────────┬─────────┘     └────────────┬───────────────┘ │    │
-│  └──────────┼───────────────────────┼────────────────────────────┼─────────────────┘    │
-│             │                       │                            │                      │
-│  ┌──────────┼───────────────────────┼────────────────────────────┼─────────────────┐    │
-│  │          ▼                       ▼                            ▼                 │    │
-│  │  ┌────────────────┐     ┌─────────────────┐     ┌─────────────────────────┐     │    │
-│  │  │solver-discovery│     │ solver-orders   │     │   solver-validators     │     │    │
-│  │  ├────────────────┤     ├─────────────────┤     ├─────────────────────────┤     │    │
-│  │  │ - Chain Events │     │ - Parse Orders  │     │ - Order Validation      │     │    │
-│  │  │ - Off-chain    │     │ - Classify Type │     │ - Route Validation      │     │    │
-│  │  │ - Stream APIs  │     │ - Registry      │     │ - Profitability Check   │     │    │
-│  │  └────────────────┘     │ - EIP-7683 Impl │     └─────────────────────────┘     │    │
-│  │                         └─────────────────┘                                     │    │
+│  │                     solver-core (Event-Driven Orchestrator)                     │    │
+│  │  ┌────────────┐   ┌──────────────┐   ┌────────────┐   ┌──────────────────────┐  │    │
+│  │  │ Lifecycle  │◄──┤    Event     ├──►│  Service   │◄──┤    Fill Tracking     │  │    │
+│  │  │  Manager   │   │  Processor   │   │  Manager   │   │   & Monitoring       │  │    │
+│  │  └────────────┘   └──────────────┘   └────────────┘   └──────────────────────┘  │    │
+│  └─────────────────────────────────────────────────────────────────────────────────┘    │
+│                                      │                                                  │
+│                         ┌────────────┼────────────┐                                     │
+│                         ▼            ▼            ▼                                     │
+│  ┌────────────────┐ ┌──────────────────┐ ┌────────────────┐ ┌──────────────────────┐   │
+│  │ solver-state   │ │ solver-discovery │ │ solver-delivery│ │ solver-settlement    │   │
+│  ├────────────────┤ ├──────────────────┤ ├────────────────┤ ├──────────────────────┤   │
+│  │ • Plugin Mgmt  │ │ • Plugin Mgmt    │ │ • Plugin Mgmt  │ │ • Fill Monitoring    │   │
+│  │ • Backend API  │ │ • Event Dedup    │ │ • TX Routing   │ │ • Oracle Checks      │   │
+│  │ • TTL Support  │ │ • Multi-chain    │ │ • Status Track │ │ • Settlement Events  │   │
+│  └────────────────┘ └──────────────────┘ └────────────────┘ └──────────────────────┘   │
+│         │                    │                    │                     │              │
+│         ▼                    ▼                    ▼                     ▼              │
+│  ┌─────────────────────────────────────────────────────────────────────────────────┐    │
+│  │                        solver-plugin (Plugin Factory)                           │    │
+│  │  ┌───────────────┐  ┌───────────────┐  ┌───────────────┐  ┌──────────────────┐  │    │
+│  │  │ State Plugins │  │Discovery Plugs│  │Delivery Plugs │  │Settlement Plugs  │  │    │
+│  │  ├───────────────┤  ├───────────────┤  ├───────────────┤  ├──────────────────┤  │    │
+│  │  │ • Memory      │  │ • EIP-7683    │  │ • EVM Ethers  │  │ • Direct         │  │    │
+│  │  │ • File        │  │   OnChain     │  │               │  │ • Arbitrum       │  │    │
+│  │  └───────────────┘  └───────────────┘  └───────────────┘  └──────────────────┘  │    │
+│  │                                  ┌───────────────┐                               │    │
+│  │                                  │Order Processor│                               │    │
+│  │                                  ├───────────────┤                               │    │
+│  │                                  │ • EIP-7683    │                               │    │
+│  │                                  │   Parser      │                               │    │
+│  │                                  └───────────────┘                               │    │
 │  └─────────────────────────────────────────────────────────────────────────────────┘    │
 │                                                                                         │
 │  ┌─────────────────────────────────────────────────────────────────────────────────┐    │
-│  │                          Execution & Settlement Layer                           │    │
-│  │  ┌───────────────┐     ┌─────────────────┐     ┌─────────────────────────┐      │    │
-│  │  │solver-delivery│     │solver-settlement│     │   solver-strategies     │      │    │
-│  │  ├───────────────┤     ├─────────────────┤     ├─────────────────────────┤      │    │
-│  │  │ - Submit TX   │     │ - Claim Rewards │     │ - Route Optimization    │      │    │
-│  │  │ - Track Status│     │ - Attestations  │     │ - Execution Planning    │      │    │
-│  │  │ - Retry Logic │     │ - Direct/Relay  │     │ - Fallback Strategies   │      │    │
-│  │  └───────┬───────┘     └─────────────────┘     └─────────────────────────┘      │    │
-│  └──────────┼──────────────────────────────────────────────────────────────────────┘    │
-│             │                                                                           │
-│  ┌──────────┼──────────────────────────────────────────────────────────────────────┐    │
-│  │          ▼                                                                      │    │
-│  │  ┌───────────────┐     ┌─────────────────┐     ┌─────────────────────────┐      │    │
-│  │  │ solver-chains │     │solver-liquidity │     │   solver-oracles        │      │    │
-│  │  ├───────────────┤     ├─────────────────┤     ├─────────────────────────┤      │    │
-│  │  │ - EVM Adapter │     │ - DEX Discovery │     │ - Price Feeds           │      │    │
-│  │  │ - Chain APIs  │     │ - Route Finding │     │ - Attestation Data      │      │    │
-│  │  │ - Registry    │     │ - Slippage Calc │     │ - External APIs         │      │    │
-│  │  └───────────────┘     └─────────────────┘     └─────────────────────────┘      │    │
+│  │                    solver-types (Plugin Interface Layer)                        │    │
+│  │  ┌──────────────────────────────────────────────────────────────────────────┐  │    │
+│  │  │ Plugin Traits: BasePlugin, StatePlugin, DiscoveryPlugin,                 │  │    │
+│  │  │               DeliveryPlugin, SettlementPlugin, OrderProcessor           │  │    │
+│  │  └──────────────────────────────────────────────────────────────────────────┘  │    │
+│  │  ┌──────────────────────────────────────────────────────────────────────────┐  │    │
+│  │  │ Core Types: Event System, Configuration Structs, Error Types             │  │    │
+│  │  └──────────────────────────────────────────────────────────────────────────┘  │    │
 │  └─────────────────────────────────────────────────────────────────────────────────┘    │
 │                                                                                         │
 │  ┌─────────────────────────────────────────────────────────────────────────────────┐    │
-│  │                           Infrastructure & Support                              │    │
-│  │  ┌───────────────┐     ┌─────────────────┐     ┌─────────────────────────┐      │    │
-│  │  │ solver-state  │     │solver-monitoring│     │   solver-config         │      │    │
-│  │  ├───────────────┤     ├─────────────────┤     ├─────────────────────────┤      │    │
-│  │  │ - Order State │     │ - Metrics       │     │ - TOML Parsing          │      │    │
-│  │  │ - Settlement  │     │ - Health Checks │     │ - Validation            │      │    │
-│  │  │ - Persistence │     │ - Tracing       │     │ - Configuration         │      │    │
-│  │  └───────────────┘     └─────────────────┘     └─────────────────────────┘      │    │
-│  └─────────────────────────────────────────────────────────────────────────────────┘    │
-│                                                                                         │
-│  ┌─────────────────────────────────────────────────────────────────────────────────┐    │
-│  │                            solver-types (Shared Types)                          │    │
-│  │  Common types, traits, and interfaces used across all crates                    │    │
+│  │                         solver-config (Configuration)                           │    │
+│  │  TOML Loading • Environment Variables • Validation • Error Handling             │    │
 │  └─────────────────────────────────────────────────────────────────────────────────┘    │
 └─────────────────────────────────────────────────────────────────────────────────────────┘
 ```
 
 ## Architecture
 
-The solver is built as a modular Rust workspace with specialized crates for different responsibilities:
+The solver is built as a modular Rust workspace with a **plugin-based architecture** that enables flexible extensibility:
 
-### Core Components
+### Core Infrastructure
 
-- **solver-types**: Core types, traits, and common data structures used across all crates
-- **solver-core**: Main orchestration engine that coordinates all solver components
-- **solver-service**: HTTP API service and main executable binary
+- **solver-types**: Foundational type system and plugin interfaces that define the contract for all extensible components
+- **solver-core**: Plugin-based orchestration engine that coordinates all services through event-driven communication
+- **solver-service**: HTTP API service and main executable binary with health checks and metrics endpoints
+- **solver-config**: Configuration management system with TOML loading and environment variable support
 
-### Order Management
+### Plugin System
 
-- **solver-orders**: Order parsing, classification, and protocol implementations (EIP-7683)
-- **solver-discovery**: Intent discovery from on-chain events and off-chain sources
-- **solver-validators**: Comprehensive validation pipeline for orders and solutions
+- **solver-plugin**: Comprehensive plugin implementations including:
+  - **State Plugins**: Memory and file-based storage backends
+  - **Discovery Plugins**: EIP-7683 on-chain event monitoring
+  - **Delivery Plugins**: EVM transaction submission via ethers.rs
+  - **Settlement Plugins**: Direct and Arbitrum-specific settlement strategies
+  - **Order Processors**: EIP-7683 order handling
 
-### Execution Infrastructure
+### Service Layer
 
-- **solver-chains**: Multi-chain blockchain adapters supporting various networks
-- **solver-delivery**: Transaction submission and confirmation tracking
-- **solver-strategies**: Strategy implementations for order execution and route optimization
-- **solver-liquidity**: Liquidity source discovery and routing optimization
-
-### Supporting Services
-
-- **solver-settlement**: Settlement mechanisms and reward claiming
-- **solver-state**: State management and persistence layer
-- **solver-oracles**: Price oracle integrations for accurate valuations
-- **solver-monitoring**: Metrics, health checks, and distributed tracing
-- **solver-config**: Configuration management and validation
+- **solver-state**: Unified state management service that abstracts storage backends through plugins
+- **solver-discovery**: Multi-chain order discovery service with event deduplication and comprehensive statistics
+- **solver-delivery**: Transaction submission orchestration with configurable delivery strategies
+- **solver-settlement**: Settlement readiness monitoring and orchestration service
 
 ## Quick Start
 
@@ -149,17 +136,7 @@ The solver can be configured using TOML files. See `config/` directory for examp
 
 ### Validating Configuration
 
-You can validate configuration files before running the solver using the `validate-config` binary:
-
-```bash
-# Validate a configuration file
-cargo run --bin validate-config config/local.toml
-
-# Or if you have already built the project
-./target/debug/validate-config config/local.toml
-```
-
-This will check if the configuration file is valid and display key settings.
+Configuration files are validated automatically when starting the solver. The solver will check if the configuration file is valid and report any errors before starting.
 
 ### Running with Custom Configuration
 
@@ -211,10 +188,10 @@ First, run the setup script to start two local blockchain nodes and deploy all n
 
 ```bash
 # Make scripts executable (first time only)
-chmod +x scripts/*.sh
+chmod +x scripts/demo/*.sh
 
 # Setup two local chains with all contracts deployed
-./scripts/setup_local_nodes.sh
+./scripts/demo/setup_local_anvil.sh
 ```
 
 This script will:
@@ -237,7 +214,7 @@ In a new terminal, build and run the solver:
 cargo build
 
 # Run the solver with local configuration
-cargo run --bin oif-solver -- --config config/local.toml --log-level debug
+cargo run --bin solver-service -- --config config/local.toml --log-level debug
 ```
 
 The solver will:
@@ -248,14 +225,14 @@ The solver will:
 
 ### Step 3: Run the Demo
 
-In another terminal, execute the demo script to create and observe a cross-chain intent:
+In another terminal, execute the send intent script to create and observe a cross-chain intent:
 
 ```bash
-# Run the demo
-./scripts/demo.sh
+# Send a cross-chain intent
+./scripts/demo/send_intent.sh
 ```
 
-The demo script will:
+This script will:
 
 1. Show initial balances on both chains
 2. Create a cross-chain intent (user deposits tokens on origin chain)
@@ -322,35 +299,33 @@ The codebase follows these conventions:
 
 ## Current Implementation Status
 
-### ✅ Implemented
+### ✅ Fully Implemented
 
-- **Core Infrastructure**: Basic solver engine and coordination
-- **Chain Adapters**: EVM chain support via ethers-rs
-- **Order Discovery**: On-chain event monitoring for EIP-7683 intents
-- **Transaction Delivery**: Direct RPC-based transaction submission
-- **Basic Settlement**: Attestation generation and claim submission
-- **Monitoring**: Metrics collection and health checks
-- **API Service**: RESTful API for solver interaction
+- **Plugin-Based Architecture**: Complete plugin factory system with type-safe plugin creation and management
+- **Core Orchestration**: Event-driven orchestrator with lifecycle management and plugin coordination
+- **EVM Chain Support**: Comprehensive EVM support via ethers.rs with gas optimization and nonce management
+- **EIP-7683 Order Processing**: Complete support for EIP-7683 cross-chain intent discovery and execution
+- **State Management**: Pluggable storage with memory and file backends
+- **Configuration System**: TOML-based config with environment variable substitution and validation
+- **HTTP API Service**: RESTful endpoints with health checks and graceful shutdown
 
 ### 🚧 Partially Implemented
 
-- **Order Types**: Only EIP-7683 cross-chain intents are supported
-- **Chain Support**: Currently optimized for EVM chains only
-- **Settlement**: Basic implementation without full reward optimization
+- **Transaction Delivery**: Core delivery service with RoundRobin strategy (other strategies configured but not implemented)
+- **Settlement Orchestration**: Settlement monitoring service with plugin interface (some settlement plugins incomplete)
+- **Metrics Collection**: Placeholder metrics endpoints (actual Prometheus metrics not fully integrated)
+- **API Endpoints**: Health and admin endpoints implemented, but order retrieval endpoints return placeholder data
 
-### ❌ Not Yet Implemented
+### 🔮 Future Extensions
 
-The following components have crate structure but require implementation:
+The plugin architecture enables easy addition of new functionality:
 
-- **Strategies**: Route optimization, execution planning, and fallback mechanisms
-- **Validators**: Order validation, liquidity checks, and profitability assessment
-- **Liquidity Sources**: DEX integrations and liquidity aggregation
-- **Price Oracles**: External price feed integrations
-- **Advanced Features**:
-  - Multi-protocol support beyond EIP-7683
-  - MEV protection strategies
-  - Batch order processing
-  - Advanced route optimization algorithms
+- **Additional Order Types**: Beyond EIP-7683, new order formats can be added as order processor plugins
+- **Multi-Chain Support**: New blockchain networks can be supported by implementing delivery plugins
+- **Advanced Settlement**: Complex settlement strategies can be added as settlement plugins
+- **Liquidity Integration**: DEX and AMM integrations can be implemented as discovery or delivery plugins
+- **Price Oracles**: External price feeds can be integrated as needed through the plugin system
+- **Enhanced Monitoring**: Full Prometheus metrics and distributed tracing integration
 
 ## License
 

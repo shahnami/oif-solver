@@ -1,76 +1,45 @@
-# Example configuration for OIF Solver Service
+# Local development configuration for OIF Solver
 
 # Main solver settings
 [solver]
-name = "example-solver"
-log_level = "info"
+name = "oif-solver-local"
+log_level = "debug"
 http_port = 8080
 metrics_port = 9090
 
 # Plugin configuration
 [plugins]
 
-# Discovery plugins - for finding cross-chain intents
-[plugins.discovery.eip7683_mainnet]
+# Discovery plugins
+[plugins.discovery.local_discovery]
 enabled = true
 plugin_type = "eip7683_onchain"
 
-[plugins.discovery.eip7683_mainnet.config]
+[plugins.discovery.local_discovery.config]
 chain_id = 31337
 rpc_url = "http://localhost:8545"
 timeout_ms = 30000
-poll_interval_ms = 12000
+poll_interval_ms = 3000
 batch_size = 100
-# Contract addresses to monitor
-input_settler_addresses = ["0x1234567890123456789012345678901234567890"]
-output_settler_addresses = []
-# Event monitoring flags
+# Local test contracts
+input_settler_addresses = ["0xCf7Ed3AccA5a467e9e704C703E8D87F634fB0Fc9"]
+output_settler_addresses = ["0xDc64a140Aa3E981100a9becA4E685f962f0cF6C9"]
+# Event monitoring
 monitor_open = true
 monitor_finalised = true
 monitor_order_purchased = true
-# Historical sync
-enable_historical_sync = false
-historical_start_block = 0
-
-[plugins.discovery.eip7683_arbitrum]
-enabled = false
-plugin_type = "eip7683_onchain"
-
-[plugins.discovery.eip7683_arbitrum.config]
-chain_id = 31338
-rpc_url = "http://localhost:8546"
-timeout_ms = 30000
-poll_interval_ms = 2000
-batch_size = 100
-input_settler_addresses = []
-output_settler_addresses = []
-monitor_open = true
-monitor_finalised = true
-monitor_order_purchased = false
+# No historical sync for local dev
 enable_historical_sync = false
 
-# Delivery plugins - for executing transactions
-[plugins.delivery.mainnet_delivery]
+# Delivery plugins
+[plugins.delivery.local_delivery]
 enabled = true
 plugin_type = "evm_ethers"
 
-[plugins.delivery.mainnet_delivery.config]
+[plugins.delivery.local_delivery.config]
 chain_id = 31337
 rpc_url = "http://localhost:8545"
-private_key = "0xac0974bec39a17e36ba4a6b4d238ff944bacb478cbed5efcae784d7bf4f2ff80"
-max_retries = 3
-timeout_ms = 60000
-enable_eip1559 = true
-nonce_management = true
-max_pending_transactions = 10
-
-[plugins.delivery.arbitrum_delivery]
-enabled = false
-plugin_type = "evm_ethers"
-
-[plugins.delivery.arbitrum_delivery.config]
-chain_id = 31338
-rpc_url = "http://localhost:8546"
+# Hardhat test account #0
 private_key = "0xac0974bec39a17e36ba4a6b4d238ff944bacb478cbed5efcae784d7bf4f2ff80"
 max_retries = 3
 timeout_ms = 30000
@@ -78,47 +47,85 @@ enable_eip1559 = true
 nonce_management = true
 max_pending_transactions = 10
 
-# State plugins - for storing order and settlement data
-[plugins.state.primary_state]
+# State plugins
+[plugins.state.memory_state]
 enabled = true
 plugin_type = "memory"
 
-[plugins.state.primary_state.config]
-max_entries = 10000
+[plugins.state.memory_state.config]
+max_entries = 1000
 
-[plugins.state.backup_state]
-enabled = false
+[plugins.state.file_state]
+enabled = true
 plugin_type = "file"
 
-[plugins.state.backup_state.config]
-storage_path = "./data/state"
+[plugins.state.file_state.config]
+storage_path = "./data"
+create_dirs = true
+sync_on_write = true
 
-# Order plugins (currently empty - implement when needed)
-[plugins.order]
+# Order plugins
+[plugins.order.eip7683_order]
+enabled = true
+plugin_type = "eip7683_order"
 
-# Settlement plugins (currently empty - implement when needed)
-[plugins.settlement]
+[plugins.order.eip7683_order.config]
+solver_address = "0xf39Fd6e51aad88F6F4ce6aB8827279cffFb92266"
+output_settler_address = "0xDc64a140Aa3E981100a9becA4E685f962f0cF6C9"
+input_settler_addresses = ["0xCf7Ed3AccA5a467e9e704C703E8D87F634fB0Fc9"]
+oracle_address = "0x9fE46736679d2D9a65F0992F2272dE9f3c7fa6e0"
+max_order_age_seconds = 86400
+min_fill_deadline_seconds = 300
+validate_signatures = false                                              # Disable for local testing
+
+# Settlement plugins
+[plugins.settlement.direct_settlement]
+enabled = true
+plugin_type = "direct_settlement"
+
+[plugins.settlement.direct_settlement.config]
+oracle_address = "0x9fE46736679d2D9a65F0992F2272dE9f3c7fa6e0"
+min_confirmations = 1
+dispute_period_seconds = 10                                   # 10 seconds for testing
+claim_window_seconds = 86400                                  # 24 hours
 
 # Delivery configuration
 [delivery]
-strategy = "RoundRobin"   # Options: "RoundRobin"
-fallback_enabled = true
-max_parallel_attempts = 3
+strategy = "RoundRobin"
+fallback_enabled = false
+max_parallel_attempts = 1
 
 # Settlement configuration
 [settlement]
-default_strategy = "direct"
-fallback_strategies = ["arbitrum_bridge"]
-profit_threshold_wei = "1000000000000000" # 0.001 ETH
+default_strategy = "direct_settlement"
+fallback_strategies = []
+profit_threshold_wei = "0"             # No profit requirement for testing
+monitor_interval_seconds = 10          # Check fills every 10 seconds
 
 # Discovery configuration
 [discovery]
-# Additional configurable fields (with defaults if not specified)
+realtime_monitoring = true
+max_events_per_second = 1000
 max_concurrent_sources = 10
 
 # State configuration
 [state]
-default_backend = "primary_state" # Must match a plugin name in plugins.state
+default_backend = "file_state"
 enable_metrics = true
-cleanup_interval_seconds = 300    # 5 minutes
+cleanup_interval_seconds = 300  # 5 minutes
 max_concurrent_operations = 100
+
+# Contract addresses for testing
+[contracts]
+token = "0x5FbDB2315678afecb367f032d93F642f64180aa3"
+input_settler = "0xCf7Ed3AccA5a467e9e704C703E8D87F634fB0Fc9"
+output_settler = "0xDc64a140Aa3E981100a9becA4E685f962f0cF6C9"
+the_compact = "0xe7f1725E7734CE288F8367e1Bb143E90bb3F0512"
+permit2 = "0x000000000022D473030F116dDEE9F6B43aC78BA3"
+oracle = "0x9fE46736679d2D9a65F0992F2272dE9f3c7fa6e0"
+
+# Test accounts
+[accounts]
+solver = "0xf39Fd6e51aad88F6F4ce6aB8827279cffFb92266"
+user = "0x70997970C51812dc3A010C7d01b50e0d17dc79C8"
+user_private_key = "0x59c6995e998f97a5a0044966f0945389dc9e86dae88c7a8412f4603b6b78690d"

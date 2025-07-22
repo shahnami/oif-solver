@@ -1,4 +1,11 @@
-// solver-plugins/src/delivery/evm_ethers.rs
+//! # Ethers.rs-based EVM Delivery Plugin
+//!
+//! Provides transaction delivery for EVM-compatible blockchains using ethers.rs.
+//!
+//! This plugin implements transaction submission, monitoring, and management for
+//! Ethereum and EVM-compatible chains using the ethers.rs library. It supports
+//! features like EIP-1559, nonce management, gas price optimization, and 
+//! transaction status tracking.
 
 use async_trait::async_trait;
 use dashmap::DashMap;
@@ -18,44 +25,88 @@ use std::time::{Duration, SystemTime, UNIX_EPOCH};
 use tokio::sync::Mutex;
 use tracing::{debug, error, info, warn};
 
-// Type aliases to resolve conflicts
+/// Utility function to truncate hashes for display purposes.
+fn truncate_hash(hash: &str) -> String {
+	if hash.len() <= 12 {
+		hash.to_string()
+	} else {
+		format!("{}...{}", &hash[..6], &hash[hash.len() - 4..])
+	}
+}
+
+// Type aliases to resolve naming conflicts between ethers and solver types
 type SolverTransaction = solver_types::plugins::Transaction;
 type SolverTxHash = String;
 type SolverTransactionReceipt = solver_types::plugins::TransactionReceipt;
 
-/// EVM Ethers Delivery Plugin using real ethers-rs
+/// EVM delivery plugin implementation using ethers.rs library.
+///
+/// Manages transaction submission and monitoring for EVM-compatible blockchains
+/// with support for advanced features like gas price management, nonce tracking,
+/// retry logic, and transaction replacement strategies.
 #[derive(Debug)]
 pub struct EvmEthersDeliveryPlugin {
+	/// Plugin configuration parameters
 	config: EvmEthersConfig,
+	/// Ethers provider for RPC communication
 	provider: Option<Arc<Provider<Http>>>,
+	/// Local wallet for transaction signing
 	wallet: Option<Arc<LocalWallet>>,
+	/// Client middleware combining provider and wallet
 	client: Option<Arc<SignerMiddleware<Provider<Http>, LocalWallet>>>,
+	/// Performance metrics tracking
 	metrics: PluginMetrics,
+	/// Initialization status flag
 	is_initialized: bool,
+	/// Cache of pending transactions being monitored
 	pending_transactions: Arc<DashMap<SolverTxHash, PendingTransaction>>,
+	/// Nonce management for sequential transaction ordering
 	nonce_manager: Arc<Mutex<Option<U256>>>,
 }
 
+/// Configuration for the EVM Ethers delivery plugin.
+///
+/// Defines connection parameters, transaction settings, and operational
+/// preferences for interacting with EVM-compatible blockchains.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct EvmEthersConfig {
+	/// Target blockchain network ID
 	pub chain_id: ChainId,
+	/// JSON-RPC endpoint URL
 	pub rpc_url: String,
+	/// Private key for transaction signing (should be secured)
 	pub private_key: String,
+	/// Maximum retry attempts for failed transactions
 	pub max_retries: u32,
+	/// Transaction timeout in milliseconds
 	pub timeout_ms: u64,
+	/// Multiplier for gas price adjustments (e.g., 1.1 for 10% increase)
 	pub gas_price_multiplier: f64,
+	/// Maximum allowed gas price in wei
 	pub max_gas_price: Option<u64>,
+	/// Whether to use EIP-1559 transaction format
 	pub enable_eip1559: bool,
+	/// Number of blocks to wait for transaction confirmation
 	pub confirmation_blocks: u32,
+	/// Whether to manage nonces internally
 	pub nonce_management: bool,
+	/// Whether to monitor mempool for transaction status
 	pub mempool_monitoring: bool,
+	/// Maximum number of pending transactions to track
 	pub max_pending_transactions: usize,
 }
 
+/// Represents a transaction that has been submitted but not yet confirmed.
+///
+/// Tracks the submission time, current status, and nonce for pending
+/// transactions to enable monitoring and potential replacement.
 #[derive(Debug, Clone)]
 struct PendingTransaction {
+	/// Unix timestamp when the transaction was submitted
 	pub submitted_at: Timestamp,
+	/// Current delivery status of the transaction
 	pub status: DeliveryStatus,
+	/// Transaction nonce if managed internally
 	pub nonce: Option<U256>,
 }
 
@@ -66,6 +117,7 @@ impl Default for EvmEthersDeliveryPlugin {
 }
 
 impl EvmEthersDeliveryPlugin {
+	/// Create a new EVM Ethers delivery plugin with default configuration.
 	pub fn new() -> Self {
 		Self {
 			config: EvmEthersConfig::default(),
@@ -79,6 +131,10 @@ impl EvmEthersDeliveryPlugin {
 		}
 	}
 
+	/// Create a new EVM Ethers delivery plugin with custom configuration.
+	///
+	/// # Arguments
+	/// * `config` - Configuration parameters for the plugin
 	pub fn with_config(config: EvmEthersConfig) -> Self {
 		Self {
 			config,
@@ -93,7 +149,7 @@ impl EvmEthersDeliveryPlugin {
 	}
 
 	async fn setup_provider(&mut self) -> PluginResult<()> {
-		info!(
+		debug!(
 			"Setting up ethers provider for chain {}",
 			self.config.chain_id
 		);
@@ -116,7 +172,6 @@ impl EvmEthersDeliveryPlugin {
 		}
 
 		self.provider = Some(Arc::new(provider));
-		info!("Provider setup complete for chain {}", self.config.chain_id);
 		Ok(())
 	}
 
@@ -134,7 +189,7 @@ impl EvmEthersDeliveryPlugin {
 			.map_err(|e| PluginError::InvalidConfiguration(format!("Invalid private key: {}", e)))?
 			.with_chain_id(self.config.chain_id);
 
-		info!("Wallet configured for address: {}", wallet.address());
+		debug!("Wallet configured for address: {}", wallet.address());
 
 		let provider = self
 			.provider
@@ -371,7 +426,10 @@ impl EvmEthersDeliveryPlugin {
 
 		let tx_hash = format!("{:?}", pending_tx.tx_hash());
 
-		info!("Transaction submitted successfully: {}", tx_hash);
+		info!(
+			"Transaction submitted successfully: {}",
+			truncate_hash(&tx_hash)
+		);
 		Ok(tx_hash)
 	}
 
@@ -492,8 +550,6 @@ impl BasePlugin for EvmEthersDeliveryPlugin {
 	}
 
 	async fn initialize(&mut self, config: PluginConfig) -> PluginResult<()> {
-		info!("Initializing EVM Ethers delivery plugin");
-
 		// Parse configuration
 		if let Some(chain_id) = config.get_number("chain_id") {
 			self.config.chain_id = chain_id as ChainId;
@@ -534,7 +590,6 @@ impl BasePlugin for EvmEthersDeliveryPlugin {
 		self.setup_wallet().await?;
 
 		self.is_initialized = true;
-		info!("EVM Ethers delivery plugin initialized successfully");
 		Ok(())
 	}
 

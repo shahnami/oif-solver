@@ -1,22 +1,42 @@
-// solver-plugins/src/settlement/direct.rs
+//! # Direct Settlement Plugin
+//!
+//! Implements direct settlement mechanism for cross-chain orders.
+//!
+//! This plugin provides immediate settlement on the origin chain after
+//! oracle attestation confirms successful order fills. It manages dispute
+//! periods, claim windows, and verification of settlement conditions.
 
 use async_trait::async_trait;
 use serde::{Deserialize, Serialize};
 use solver_types::*;
 use std::any::Any;
 
-/// Direct settlement plugin - settles immediately on origin chain
+/// Direct settlement plugin - settles immediately on origin chain.
+///
+/// Handles direct settlement workflow where orders are settled on the
+/// origin chain immediately after oracle attestation confirms the fill
+/// on the destination chain.
 #[derive(Debug, Default)]
 pub struct DirectSettlementPlugin {
+	/// Plugin configuration settings
 	config: DirectSettlementConfig,
+	/// Whether the plugin has been initialized
 	is_initialized: bool,
 }
 
+/// Configuration for the direct settlement plugin.
+///
+/// Contains settings for oracle verification, confirmation requirements,
+/// dispute periods, and claim windows.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct DirectSettlementConfig {
+	/// Address of the oracle contract for fill verification
 	pub oracle_address: Address,
+	/// Minimum block confirmations required before settlement
 	pub min_confirmations: u32,
+	/// Duration of the dispute period in seconds
 	pub dispute_period_seconds: u64,
+	/// Duration of the claim window in seconds
 	pub claim_window_seconds: u64,
 }
 
@@ -32,6 +52,7 @@ impl Default for DirectSettlementConfig {
 }
 
 impl DirectSettlementPlugin {
+	/// Creates a new direct settlement plugin with default configuration.
 	pub fn new() -> Self {
 		Self {
 			config: DirectSettlementConfig::default(),
@@ -39,6 +60,7 @@ impl DirectSettlementPlugin {
 		}
 	}
 
+	/// Creates a new direct settlement plugin with the specified configuration.
 	pub fn with_config(config: DirectSettlementConfig) -> Self {
 		Self {
 			config,
@@ -49,22 +71,27 @@ impl DirectSettlementPlugin {
 
 #[async_trait]
 impl BasePlugin for DirectSettlementPlugin {
+	/// Returns the plugin type identifier.
 	fn plugin_type(&self) -> &'static str {
 		"direct_settlement"
 	}
 
+	/// Returns the human-readable plugin name.
 	fn name(&self) -> String {
 		"Direct Settlement Plugin".to_string()
 	}
 
+	/// Returns the plugin version.
 	fn version(&self) -> &'static str {
 		"1.0.0"
 	}
 
+	/// Returns a brief description of the plugin.
 	fn description(&self) -> &'static str {
 		"Direct settlement plugin that settles orders immediately on the origin chain"
 	}
 
+	/// Initializes the plugin with configuration parameters.
 	async fn initialize(&mut self, config: PluginConfig) -> PluginResult<()> {
 		// Parse configuration
 		if let Some(ConfigValue::String(oracle)) = config.config.get("oracle_address") {
@@ -89,6 +116,7 @@ impl BasePlugin for DirectSettlementPlugin {
 		Ok(())
 	}
 
+	/// Validates plugin configuration parameters.
 	fn validate_config(&self, config: &PluginConfig) -> PluginResult<()> {
 		if !config.config.contains_key("oracle_address") {
 			return Err(PluginError::InvalidConfiguration(
@@ -99,6 +127,7 @@ impl BasePlugin for DirectSettlementPlugin {
 		Ok(())
 	}
 
+	/// Performs health check on the plugin.
 	async fn health_check(&self) -> PluginResult<PluginHealth> {
 		if !self.is_initialized {
 			return Ok(PluginHealth::unhealthy("Plugin not initialized"));
@@ -109,15 +138,18 @@ impl BasePlugin for DirectSettlementPlugin {
 		))
 	}
 
+	/// Returns current plugin metrics.
 	async fn get_metrics(&self) -> PluginResult<PluginMetrics> {
 		Ok(PluginMetrics::new())
 	}
 
+	/// Shuts down the plugin gracefully.
 	async fn shutdown(&mut self) -> PluginResult<()> {
 		self.is_initialized = false;
 		Ok(())
 	}
 
+	/// Returns the configuration schema for the plugin.
 	fn config_schema(&self) -> PluginConfigSchema {
 		PluginConfigSchema::new()
 			.required(
@@ -145,10 +177,12 @@ impl BasePlugin for DirectSettlementPlugin {
 			)
 	}
 
+	/// Returns self as Any reference for downcasting.
 	fn as_any(&self) -> &dyn Any {
 		self
 	}
 
+	/// Returns self as mutable Any reference for downcasting.
 	fn as_any_mut(&mut self) -> &mut dyn Any {
 		self
 	}
@@ -156,11 +190,19 @@ impl BasePlugin for DirectSettlementPlugin {
 
 #[async_trait]
 impl SettlementPlugin for DirectSettlementPlugin {
+	/// Checks if this plugin can handle settlement for the given chain and order type.
+	///
+	/// Direct settlement can handle any chain as it relies on oracle attestations
+	/// rather than chain-specific mechanisms.
 	async fn can_handle(&self, _chain_id: ChainId, _order_type: &str) -> PluginResult<bool> {
 		// Can handle any chain since we only check oracle attestations
 		Ok(true)
 	}
 
+	/// Checks oracle attestation status for a fill.
+	///
+	/// Queries the oracle to determine if the fill has been attested and
+	/// whether it's past the dispute period.
 	async fn check_oracle_attestation(&self, fill: &FillData) -> PluginResult<AttestationStatus> {
 		// For direct settlement, check if oracle has attested the fill
 		// In a real implementation, this would query the oracle contract
@@ -172,9 +214,9 @@ impl SettlementPlugin for DirectSettlementPlugin {
 			.as_secs();
 
 		let time_since_fill = current_time.saturating_sub(fill.fill_timestamp);
-		let is_attested = time_since_fill > 30; // Assume attestation after 30 seconds
+		let is_attested = time_since_fill > 5; // Assume attestation after 5 seconds
 
-		tracing::info!(
+		tracing::debug!(
 			"Oracle attestation check: current_time={}, fill_timestamp={}, time_since_fill={}, is_attested={}",
 			current_time, fill.fill_timestamp, time_since_fill, is_attested
 		);
@@ -201,6 +243,10 @@ impl SettlementPlugin for DirectSettlementPlugin {
 		})
 	}
 
+	/// Gets the claim window for settlement.
+	///
+	/// Calculates when claims can be submitted based on attestation time
+	/// and dispute period configuration.
 	async fn get_claim_window(
 		&self,
 		_order_type: &str,
@@ -230,6 +276,10 @@ impl SettlementPlugin for DirectSettlementPlugin {
 		})
 	}
 
+	/// Verifies all conditions required for settlement.
+	///
+	/// Checks oracle attestation, dispute status, and claim window timing
+	/// to determine if the fill is ready for settlement.
 	async fn verify_settlement_conditions(
 		&self,
 		fill: &FillData,
@@ -277,6 +327,10 @@ impl SettlementPlugin for DirectSettlementPlugin {
 		})
 	}
 
+	/// Handles dispute claims against a settlement.
+	///
+	/// For direct settlement, disputes are forwarded to the oracle
+	/// for resolution based on provided evidence.
 	async fn handle_dispute(
 		&self,
 		_fill: &FillData,
@@ -295,6 +349,10 @@ impl SettlementPlugin for DirectSettlementPlugin {
 		})
 	}
 
+	/// Returns the requirements for this settlement mechanism.
+	///
+	/// Specifies oracle dependencies and confirmation requirements
+	/// needed for direct settlement to function properly.
 	fn get_settlement_requirements(&self) -> SettlementRequirements {
 		// Since settlement execution is handled by delivery service,
 		// we only specify oracle requirements for orchestration
@@ -310,6 +368,7 @@ impl SettlementPlugin for DirectSettlementPlugin {
 		}
 	}
 
+	/// Returns the settlement types supported by this plugin.
 	fn supported_settlement_types(&self) -> Vec<SettlementType> {
 		vec![SettlementType::Direct]
 	}

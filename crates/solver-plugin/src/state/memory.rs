@@ -1,3 +1,12 @@
+//! # In-Memory State Plugin
+//!
+//! Provides an in-memory implementation of the state storage plugin.
+//!
+//! This plugin implements state storage using HashMap in memory, suitable for
+//! development, testing, and scenarios where persistence is not required. It
+//! supports all state operations including TTL management, batch operations,
+//! and atomic updates with thread-safe access through RwLock.
+
 use async_trait::async_trait;
 use bytes::Bytes;
 use solver_types::plugins::{
@@ -9,25 +18,41 @@ use std::collections::HashMap;
 use std::sync::{Arc, RwLock};
 use std::time::{Duration, SystemTime};
 
-/// Plugin that creates in-memory state stores
+/// In-memory state storage plugin implementation.
+///
+/// Provides fast, thread-safe state storage in memory using HashMap with
+/// optional entry limits and TTL support. Ideal for development, testing,
+/// and temporary state that doesn't require persistence across restarts.
 #[derive(Debug, Default)]
 pub struct InMemoryStatePlugin {
+	/// Plugin configuration settings
 	config: InMemoryConfig,
 }
 
+/// Configuration for the in-memory state plugin.
+///
+/// Defines operational parameters for the in-memory storage including
+/// capacity limits and default expiration times for entries.
 #[derive(Debug, Clone, Default)]
 pub struct InMemoryConfig {
+	/// Maximum number of entries allowed in storage (None for unlimited)
 	pub max_entries: Option<usize>,
+	/// Default time-to-live for entries (None for no expiration)
 	pub default_ttl: Option<Duration>,
 }
 
 impl InMemoryStatePlugin {
+	/// Create a new in-memory state plugin with default configuration.
 	pub fn new() -> Self {
 		Self {
 			config: InMemoryConfig::default(),
 		}
 	}
 
+	/// Create a new in-memory state plugin with custom configuration.
+	///
+	/// # Arguments
+	/// * `config` - Configuration parameters for the plugin
 	pub fn with_config(config: InMemoryConfig) -> Self {
 		Self { config }
 	}
@@ -152,16 +177,27 @@ impl StatePlugin for InMemoryStatePlugin {
 	}
 }
 
+/// Type alias for the internal storage structure mapping keys to values and expiration times
 type InMemoryData = HashMap<String, (Bytes, Option<SystemTime>)>;
 
-/// The actual in-memory store implementation
+/// In-memory store implementation with thread-safe access.
+///
+/// Provides the actual storage implementation using a HashMap wrapped in Arc<RwLock>
+/// for thread-safe concurrent access. Manages entry expiration and capacity limits
+/// based on the plugin configuration.
 #[derive(Debug)]
 pub struct InMemoryStore {
+	/// Thread-safe storage of key-value pairs with optional expiration times
 	data: Arc<RwLock<InMemoryData>>,
+	/// Configuration parameters for this store instance
 	config: InMemoryConfig,
 }
 
 impl InMemoryStore {
+	/// Create a new in-memory store with the specified configuration.
+	///
+	/// # Arguments
+	/// * `config` - Configuration parameters including capacity and TTL settings
 	pub fn new(config: InMemoryConfig) -> Self {
 		Self {
 			data: Arc::new(RwLock::new(HashMap::new())),
@@ -169,6 +205,13 @@ impl InMemoryStore {
 		}
 	}
 
+	/// Check if an entry has expired based on its expiration timestamp.
+	///
+	/// # Arguments
+	/// * `expiry` - Optional expiration time to check
+	///
+	/// # Returns
+	/// True if the entry has expired, false otherwise
 	fn is_expired(&self, expiry: &Option<SystemTime>) -> bool {
 		if let Some(exp) = expiry {
 			SystemTime::now() > *exp
@@ -177,6 +220,13 @@ impl InMemoryStore {
 		}
 	}
 
+	/// Check if the store has reached its configured capacity limit.
+	///
+	/// # Arguments
+	/// * `data` - Current storage data to check size against limits
+	///
+	/// # Returns
+	/// Ok if capacity is available, error if limit is exceeded
 	fn check_capacity(
 		&self,
 		data: &HashMap<String, (Bytes, Option<SystemTime>)>,

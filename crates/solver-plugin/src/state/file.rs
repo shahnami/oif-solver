@@ -1,4 +1,14 @@
+//! # File-Based State Plugin
+//!
+//! Provides persistent state storage using the file system.
+//!
+//! This plugin implements state storage using individual files for each key,
+//! suitable for persistent storage across application restarts. It supports
+//! TTL management through metadata files, atomic operations, and optional
+//! synchronous writes for durability.
+
 use async_trait::async_trait;
+use base64::{engine::general_purpose, Engine as _};
 use bytes::Bytes;
 use serde::{Deserialize, Serialize};
 use solver_types::plugins::{
@@ -13,16 +23,28 @@ use std::pin::Pin;
 use std::time::{Duration, SystemTime};
 use tokio::fs;
 
-/// Plugin that creates file-based state stores
+/// File-based state storage plugin implementation.
+///
+/// Provides persistent state storage using the file system with each key
+/// stored as a separate file. Supports metadata tracking for TTL management
+/// and configurable durability through synchronous write options.
 #[derive(Debug, Default)]
 pub struct FileStatePlugin {
+	/// Plugin configuration settings
 	config: FileConfig,
 }
 
+/// Configuration for the file-based state plugin.
+///
+/// Defines storage location and operational parameters for file-based
+/// storage including directory creation and write synchronization settings.
 #[derive(Debug, Clone)]
 pub struct FileConfig {
+	/// Root directory path for storing state files
 	pub storage_path: PathBuf,
+	/// Whether to create storage directories if they don't exist
 	pub create_dirs: bool,
+	/// Whether to sync files to disk after writes for durability
 	pub sync_on_write: bool,
 }
 
@@ -37,16 +59,27 @@ impl Default for FileConfig {
 }
 
 impl FileStatePlugin {
+	/// Create a new file state plugin with default configuration.
 	pub fn new() -> Self {
 		Self {
 			config: FileConfig::default(),
 		}
 	}
 
+	/// Create a new file state plugin with custom configuration.
+	///
+	/// # Arguments
+	/// * `config` - Configuration parameters for the plugin
 	pub fn with_config(config: FileConfig) -> Self {
 		Self { config }
 	}
 
+	/// Create a new file state plugin with a specific storage path.
+	///
+	/// Uses default configuration with the specified storage directory.
+	///
+	/// # Arguments
+	/// * `path` - Path to the storage directory
 	pub fn with_path<P: AsRef<Path>>(path: P) -> Self {
 		Self {
 			config: FileConfig {
@@ -276,31 +309,67 @@ impl StatePlugin for FileStatePlugin {
 	}
 }
 
-/// File-based entry with metadata
+/// File-based entry with metadata stored as JSON.
+///
+/// Represents a single key-value entry stored in the file system with
+/// metadata for tracking creation time and expiration. Values are Base64
+/// encoded for JSON compatibility and safe storage.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 struct FileEntry {
-	value: Bytes,
+	/// Original key name
+	key: String,
+	/// Base64 encoded value for JSON safety
+	value: String,
+	/// Timestamp when the entry was created
 	created_at: SystemTime,
+	/// Optional expiration timestamp for TTL support
 	expires_at: Option<SystemTime>,
 }
 
 impl FileEntry {
-	fn new(value: Bytes) -> Self {
+	/// Create a new entry without expiration.
+	///
+	/// # Arguments
+	/// * `key` - The key for this entry
+	/// * `value` - The value to store (will be Base64 encoded)
+	fn new(key: String, value: Bytes) -> Self {
 		Self {
-			value,
+			key,
+			value: general_purpose::STANDARD.encode(&value),
 			created_at: SystemTime::now(),
 			expires_at: None,
 		}
 	}
 
-	fn with_ttl(value: Bytes, ttl: Duration) -> Self {
+	/// Create a new entry with a time-to-live.
+	///
+	/// # Arguments
+	/// * `key` - The key for this entry
+	/// * `value` - The value to store (will be Base64 encoded)
+	/// * `ttl` - Time-to-live duration after which the entry expires
+	fn with_ttl(key: String, value: Bytes, ttl: Duration) -> Self {
 		Self {
-			value,
+			key,
+			value: general_purpose::STANDARD.encode(&value),
 			created_at: SystemTime::now(),
 			expires_at: Some(SystemTime::now() + ttl),
 		}
 	}
 
+	/// Decode and retrieve the stored value.
+	///
+	/// # Returns
+	/// The decoded value bytes or Base64 decode error
+	fn get_value(&self) -> Result<Bytes, base64::DecodeError> {
+		general_purpose::STANDARD
+			.decode(&self.value)
+			.map(Bytes::from)
+	}
+
+	/// Check if this entry has expired.
+	///
+	/// # Returns
+	/// True if the entry has an expiration time that has passed
 	fn is_expired(&self) -> bool {
 		if let Some(expires_at) = self.expires_at {
 			SystemTime::now() > expires_at
@@ -310,59 +379,88 @@ impl FileEntry {
 	}
 }
 
-/// The actual file-based store implementation
+/// File-based store implementation with persistent storage.
+///
+/// Provides the actual storage implementation using individual JSON files
+/// for each key-value pair. Handles file system operations, key sanitization,
+/// and metadata management for TTL support.
 #[derive(Debug)]
 pub struct FileStore {
+	/// Configuration parameters for this store instance
 	config: FileConfig,
-	data_dir: PathBuf,
-	metadata_dir: PathBuf,
 }
 
 impl FileStore {
+	/// Create a new file store with the specified configuration.
+	///
+	/// Creates the storage directory if it doesn't exist and is configured
+	/// to do so.
+	///
+	/// # Arguments
+	/// * `config` - Configuration parameters including storage path
+	///
+	/// # Errors
+	/// Returns error if directory creation fails
 	pub async fn new(config: FileConfig) -> PluginResult<Self> {
-		let data_dir = config.storage_path.join("data");
-		let metadata_dir = config.storage_path.join("metadata");
+		// Create base storage directory
+		fs::create_dir_all(&config.storage_path)
+			.await
+			.map_err(|e| {
+				PluginError::InitializationFailed(format!(
+					"Failed to create storage directory: {}",
+					e
+				))
+			})?;
 
-		// Create subdirectories
-		fs::create_dir_all(&data_dir).await.map_err(|e| {
-			PluginError::InitializationFailed(format!("Failed to create data directory: {}", e))
-		})?;
-
-		fs::create_dir_all(&metadata_dir).await.map_err(|e| {
-			PluginError::InitializationFailed(format!("Failed to create metadata directory: {}", e))
-		})?;
-
-		Ok(Self {
-			config,
-			data_dir,
-			metadata_dir,
-		})
+		Ok(Self { config })
 	}
 
-	fn key_to_path(&self, key: &str) -> PathBuf {
-		// Simple approach: hash the key to create a filename
-		let hash = format!("{:x}", md5::compute(key));
-		self.data_dir.join(hash)
+	fn key_to_path(&self, key: &str) -> PluginResult<PathBuf> {
+		// Convert key to filesystem-safe path
+		let safe_key = self.make_filesystem_safe(key)?;
+		Ok(self.config.storage_path.join(format!("{}.json", safe_key)))
 	}
 
-	fn metadata_path(&self, key: &str) -> PathBuf {
-		let hash = format!("{:x}", md5::compute(key));
-		self.metadata_dir.join(format!("{}.meta", hash))
+	/// Convert key to filesystem-safe filename
+	/// Handles special characters and path separators
+	fn make_filesystem_safe(&self, key: &str) -> PluginResult<String> {
+		// Replace problematic characters with safe alternatives
+		let safe = key
+			.replace('/', "_slash_")
+			.replace('\\', "_backslash_")
+			.replace(':', "_")
+			.replace('*', "_star_")
+			.replace('?', "_question_")
+			.replace('<', "_lt_")
+			.replace('>', "_gt_")
+			.replace('|', "_pipe_")
+			.replace('"', "_quote_")
+			.replace(' ', "_space_");
+
+		// Ensure filename isn't too long (most filesystems have 255 char limit)
+		if safe.len() > 200 {
+			// If too long, use first 100 chars + hash of full key + last 50 chars
+			let hash = format!("{:x}", md5::compute(key));
+			let start = &safe[..100];
+			let end = &safe[safe.len().saturating_sub(50)..];
+			Ok(format!("{}_{}_..._{}", start, hash, end))
+		} else {
+			Ok(safe)
+		}
 	}
 
 	async fn read_entry(&self, key: &str) -> PluginResult<Option<FileEntry>> {
-		let meta_path = self.metadata_path(key);
+		let file_path = self.key_to_path(key)?;
 
-		match fs::read(&meta_path).await {
+		match fs::read(&file_path).await {
 			Ok(data) => {
 				let entry: FileEntry = serde_json::from_slice(&data).map_err(|e| {
-					PluginError::StateError(format!("Failed to deserialize metadata: {}", e))
+					PluginError::StateError(format!("Failed to deserialize entry: {}", e))
 				})?;
 
 				if entry.is_expired() {
 					// Clean up expired entry
-					let _ = fs::remove_file(&meta_path).await;
-					let _ = fs::remove_file(self.key_to_path(key)).await;
+					let _ = fs::remove_file(&file_path).await;
 					Ok(None)
 				} else {
 					Ok(Some(entry))
@@ -370,28 +468,29 @@ impl FileStore {
 			}
 			Err(e) if e.kind() == std::io::ErrorKind::NotFound => Ok(None),
 			Err(e) => Err(PluginError::StateError(format!(
-				"Failed to read metadata: {}",
+				"Failed to read entry: {}",
 				e
 			))),
 		}
 	}
 
 	async fn write_entry(&self, key: &str, entry: &FileEntry) -> PluginResult<()> {
-		let data_path = self.key_to_path(key);
-		let meta_path = self.metadata_path(key);
+		let file_path = self.key_to_path(key)?;
 
-		// Write data
-		fs::write(&data_path, &entry.value)
+		// Ensure parent directory exists
+		if let Some(parent) = file_path.parent() {
+			fs::create_dir_all(parent).await.map_err(|e| {
+				PluginError::StateError(format!("Failed to create parent directory: {}", e))
+			})?;
+		}
+
+		// Write entry as pretty JSON for debugging
+		let json_data = serde_json::to_string_pretty(&entry)
+			.map_err(|e| PluginError::StateError(format!("Failed to serialize entry: {}", e)))?;
+
+		fs::write(&file_path, json_data)
 			.await
-			.map_err(|e| PluginError::StateError(format!("Failed to write data: {}", e)))?;
-
-		// Write metadata
-		let meta_data = serde_json::to_vec(&entry)
-			.map_err(|e| PluginError::StateError(format!("Failed to serialize metadata: {}", e)))?;
-
-		fs::write(&meta_path, meta_data)
-			.await
-			.map_err(|e| PluginError::StateError(format!("Failed to write metadata: {}", e)))?;
+			.map_err(|e| PluginError::StateError(format!("Failed to write entry: {}", e)))?;
 
 		if self.config.sync_on_write {
 			// Sync file system (simplified - in production you'd sync the specific files)
@@ -409,13 +508,126 @@ impl FileStore {
 	}
 
 	async fn delete_entry(&self, key: &str) -> PluginResult<()> {
-		let data_path = self.key_to_path(key);
-		let meta_path = self.metadata_path(key);
-
-		let _ = fs::remove_file(&data_path).await;
-		let _ = fs::remove_file(&meta_path).await;
-
+		let file_path = self.key_to_path(key)?;
+		let _ = fs::remove_file(&file_path).await;
 		Ok(())
+	}
+
+	/// Recursively collect all keys from the storage directory
+	fn collect_keys<'a>(
+		&'a self,
+		dir: &'a Path,
+		prefix: Option<&'a str>,
+		keys: &'a mut Vec<String>,
+	) -> Pin<Box<dyn Future<Output = PluginResult<()>> + Send + 'a>> {
+		Box::pin(async move {
+			let mut entries = fs::read_dir(dir)
+				.await
+				.map_err(|e| PluginError::StateError(format!("Failed to read directory: {}", e)))?;
+
+			while let Some(entry) = entries.next_entry().await.map_err(|e| {
+				PluginError::StateError(format!("Failed to read directory entry: {}", e))
+			})? {
+				let path = entry.path();
+
+				if path.is_dir() {
+					// Recursively scan subdirectories
+					self.collect_keys(&path, prefix, keys).await?;
+				} else if let Some(filename) = path.file_name().and_then(|n| n.to_str()) {
+					if filename.ends_with(".json") {
+						// Read the file to get the original key
+						if let Ok(data) = fs::read(&path).await {
+							if let Ok(file_entry) = serde_json::from_slice::<FileEntry>(&data) {
+								if !file_entry.is_expired() {
+									let key = &file_entry.key;
+									if let Some(p) = prefix {
+										if key.starts_with(p) {
+											keys.push(key.clone());
+										}
+									} else {
+										keys.push(key.clone());
+									}
+								}
+							}
+						}
+					}
+				}
+			}
+
+			Ok(())
+		})
+	}
+
+	/// Calculate storage statistics by scanning all files
+	fn calculate_stats<'a>(
+		&'a self,
+		dir: &'a Path,
+		total_keys: &'a mut u64,
+		total_size: &'a mut u64,
+	) -> Pin<Box<dyn Future<Output = PluginResult<()>> + Send + 'a>> {
+		Box::pin(async move {
+			let mut entries = fs::read_dir(dir)
+				.await
+				.map_err(|e| PluginError::StateError(format!("Failed to read directory: {}", e)))?;
+
+			while let Some(entry) = entries.next_entry().await.map_err(|e| {
+				PluginError::StateError(format!("Failed to read directory entry: {}", e))
+			})? {
+				let path = entry.path();
+
+				if path.is_dir() {
+					self.calculate_stats(&path, total_keys, total_size).await?;
+				} else if let Some(filename) = path.file_name().and_then(|n| n.to_str()) {
+					if filename.ends_with(".json") {
+						*total_keys += 1;
+						if let Ok(metadata) = entry.metadata().await {
+							*total_size += metadata.len();
+						}
+					}
+				}
+			}
+
+			Ok(())
+		})
+	}
+
+	/// Clean up expired entries recursively
+	fn cleanup_expired<'a>(
+		&'a self,
+		dir: &'a Path,
+		keys_removed: &'a mut u64,
+		bytes_freed: &'a mut u64,
+	) -> Pin<Box<dyn Future<Output = PluginResult<()>> + Send + 'a>> {
+		Box::pin(async move {
+			let mut entries = fs::read_dir(dir)
+				.await
+				.map_err(|e| PluginError::StateError(format!("Failed to read directory: {}", e)))?;
+
+			while let Some(entry) = entries.next_entry().await.map_err(|e| {
+				PluginError::StateError(format!("Failed to read directory entry: {}", e))
+			})? {
+				let path = entry.path();
+
+				if path.is_dir() {
+					self.cleanup_expired(&path, keys_removed, bytes_freed)
+						.await?;
+				} else if let Some(filename) = path.file_name().and_then(|n| n.to_str()) {
+					if filename.ends_with(".json") {
+						if let Ok(data) = fs::read(&path).await {
+							if let Ok(file_entry) = serde_json::from_slice::<FileEntry>(&data) {
+								if file_entry.is_expired() {
+									*bytes_freed += data.len() as u64;
+									*keys_removed += 1;
+									let _ = fs::remove_file(&path).await;
+								}
+							}
+						}
+					}
+				}
+			}
+
+			Ok(())
+		})
 	}
 }
 
@@ -423,18 +635,23 @@ impl FileStore {
 impl StateStore for FileStore {
 	async fn get(&self, key: &str) -> PluginResult<Option<Bytes>> {
 		match self.read_entry(key).await? {
-			Some(entry) => Ok(Some(entry.value)),
+			Some(entry) => {
+				let value = entry.get_value().map_err(|e| {
+					PluginError::StateError(format!("Failed to decode value: {}", e))
+				})?;
+				Ok(Some(value))
+			}
 			None => Ok(None),
 		}
 	}
 
 	async fn set(&self, key: &str, value: Bytes) -> PluginResult<()> {
-		let entry = FileEntry::new(value);
+		let entry = FileEntry::new(key.to_string(), value);
 		self.write_entry(key, &entry).await
 	}
 
 	async fn set_with_ttl(&self, key: &str, value: Bytes, ttl: Duration) -> PluginResult<()> {
-		let entry = FileEntry::with_ttl(value, ttl);
+		let entry = FileEntry::with_ttl(key.to_string(), value, ttl);
 		self.write_entry(key, &entry).await
 	}
 
@@ -447,33 +664,11 @@ impl StateStore for FileStore {
 	}
 
 	async fn list_keys(&self, prefix: Option<&str>) -> PluginResult<Vec<String>> {
-		// This is a simplified implementation
-		// In production, you'd want to maintain an index of keys
 		let mut keys = Vec::new();
 
-		let mut entries = fs::read_dir(&self.metadata_dir).await.map_err(|e| {
-			PluginError::StateError(format!("Failed to read metadata directory: {}", e))
-		})?;
-
-		while let Some(entry) = entries.next_entry().await.map_err(|e| {
-			PluginError::StateError(format!("Failed to read directory entry: {}", e))
-		})? {
-			if let Some(filename) = entry.file_name().to_str() {
-				if filename.ends_with(".meta") {
-					// This is a simplified approach - in production you'd store the original key
-					// For now, we'll just return the hash
-					let key = filename.trim_end_matches(".meta").to_string();
-
-					if let Some(p) = prefix {
-						if key.starts_with(p) {
-							keys.push(key);
-						}
-					} else {
-						keys.push(key);
-					}
-				}
-			}
-		}
+		// Recursively scan the storage directory for .json files
+		self.collect_keys(&self.config.storage_path, prefix, &mut keys)
+			.await?;
 
 		Ok(keys)
 	}
@@ -522,25 +717,8 @@ impl StateStore for FileStore {
 		let mut total_keys = 0;
 		let mut total_size = 0;
 
-		let mut entries = fs::read_dir(&self.metadata_dir).await.map_err(|e| {
-			PluginError::StateError(format!("Failed to read metadata directory: {}", e))
-		})?;
-
-		while let Some(entry) = entries.next_entry().await.map_err(|e| {
-			PluginError::StateError(format!("Failed to read directory entry: {}", e))
-		})? {
-			if entry
-				.file_name()
-				.to_str()
-				.map(|n| n.ends_with(".meta"))
-				.unwrap_or(false)
-			{
-				total_keys += 1;
-				if let Ok(metadata) = entry.metadata().await {
-					total_size += metadata.len();
-				}
-			}
-		}
+		self.calculate_stats(&self.config.storage_path, &mut total_keys, &mut total_size)
+			.await?;
 
 		Ok(StorageStats {
 			total_keys,
@@ -556,28 +734,12 @@ impl StateStore for FileStore {
 		let mut keys_removed = 0;
 		let mut bytes_freed = 0;
 
-		let mut entries = fs::read_dir(&self.metadata_dir).await.map_err(|e| {
-			PluginError::StateError(format!("Failed to read metadata directory: {}", e))
-		})?;
-
-		while let Some(entry) = entries.next_entry().await.map_err(|e| {
-			PluginError::StateError(format!("Failed to read directory entry: {}", e))
-		})? {
-			if let Some(filename) = entry.file_name().to_str() {
-				if filename.ends_with(".meta") {
-					let key = filename.trim_end_matches(".meta");
-
-					// Check if entry is expired
-					if let Ok(Some(file_entry)) = self.read_entry(key).await {
-						if file_entry.is_expired() {
-							bytes_freed += file_entry.value.len() as u64;
-							keys_removed += 1;
-							let _ = self.delete_entry(key).await;
-						}
-					}
-				}
-			}
-		}
+		self.cleanup_expired(
+			&self.config.storage_path,
+			&mut keys_removed,
+			&mut bytes_freed,
+		)
+		.await?;
 
 		let duration = start.elapsed().unwrap_or_default();
 

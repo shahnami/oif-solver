@@ -1,3 +1,12 @@
+//! # HTTP API Server
+//!
+//! Provides HTTP endpoints for interacting with the solver service.
+//!
+//! This module implements a REST API server using Axum that exposes
+//! solver functionality including health checks, order queries, and
+//! settlement information. It also provides metrics endpoints for
+//! monitoring and observability.
+
 use crate::service::SolverService;
 use anyhow::Result;
 use axum::{
@@ -14,10 +23,12 @@ use tower_http::cors::CorsLayer;
 use tower_http::trace::TraceLayer;
 use tracing::info;
 
-/// Health check response
+/// Response structure for health check endpoints.
 #[derive(Serialize)]
 struct HealthResponse {
+	/// Overall status of the system
 	status: String,
+	/// Detailed status of individual services
 	services: ServiceHealthStatus,
 }
 
@@ -39,6 +50,18 @@ struct ErrorResponse {
 #[derive(Serialize)]
 struct OrderResponse {
 	order_id: String,
+	status: String,
+}
+
+/// Settlement response
+#[derive(Serialize)]
+struct SettlementResponse {
+	settlement_id: String,
+	order_id: String,
+	source_chain: u64,
+	destination_chain: u64,
+	tx_hash: String,
+	timestamp: i64,
 	status: String,
 }
 
@@ -80,6 +103,8 @@ fn create_app(service: SolverService) -> Router {
 		.route("/health/ready", get(readiness_handler))
 		// Order endpoints
 		.route("/api/v1/orders/{order_id}", get(get_order_handler))
+		// Settlement endpoints
+		.route("/api/v1/settlements/{settlement_id}", get(get_settlement_handler))
 		// Admin endpoints
 		.route("/api/v1/admin/config", get(get_config_handler))
 		// Add state
@@ -137,17 +162,63 @@ async fn readiness_handler(State(service): State<SolverService>) -> impl IntoRes
 
 /// Get order status
 async fn get_order_handler(
-	State(_service): State<SolverService>,
+	State(service): State<SolverService>,
 	Path(order_id): Path<String>,
 ) -> Result<impl IntoResponse, (StatusCode, Json<ErrorResponse>)> {
-	// TODO: Implement order status retrieval from state service
-	Ok((
-		StatusCode::OK,
-		Json(OrderResponse {
-			order_id,
-			status: "pending".to_string(),
-		}),
-	))
+	match service.get_order(&order_id).await {
+		Ok(Some(order_info)) => Ok((
+			StatusCode::OK,
+			Json(OrderResponse {
+				order_id: order_info.order.order_id,
+				status: order_info.status,
+			}),
+		)),
+		Ok(None) => Err((
+			StatusCode::NOT_FOUND,
+			Json(ErrorResponse {
+				error: "Order not found".to_string(),
+			}),
+		)),
+		Err(e) => Err((
+			StatusCode::INTERNAL_SERVER_ERROR,
+			Json(ErrorResponse {
+				error: format!("Failed to retrieve order: {}", e),
+			}),
+		)),
+	}
+}
+
+/// Get settlement status
+async fn get_settlement_handler(
+	State(service): State<SolverService>,
+	Path(settlement_id): Path<String>,
+) -> Result<impl IntoResponse, (StatusCode, Json<ErrorResponse>)> {
+	match service.get_settlement(&settlement_id).await {
+		Ok(Some(settlement)) => Ok((
+			StatusCode::OK,
+			Json(SettlementResponse {
+				settlement_id: settlement.settlement_id,
+				order_id: settlement.order_id,
+				source_chain: settlement.source_chain,
+				destination_chain: settlement.destination_chain,
+				tx_hash: settlement.tx_hash,
+				timestamp: settlement.timestamp as i64,
+				status: format!("{:?}", settlement.status),
+			}),
+		)),
+		Ok(None) => Err((
+			StatusCode::NOT_FOUND,
+			Json(ErrorResponse {
+				error: "Settlement not found".to_string(),
+			}),
+		)),
+		Err(e) => Err((
+			StatusCode::INTERNAL_SERVER_ERROR,
+			Json(ErrorResponse {
+				error: format!("Failed to retrieve settlement: {}", e),
+			}),
+		)),
+	}
 }
 
 /// Get current configuration (admin endpoint)

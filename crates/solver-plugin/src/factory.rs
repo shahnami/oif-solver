@@ -1,4 +1,11 @@
-// solver-plugins/src/factory.rs - Final implementation with separate traits
+//! # Plugin Factory System
+//!
+//! Provides registration and creation of plugin instances for the solver system.
+//!
+//! This module implements the factory pattern for plugins, allowing dynamic
+//! registration and creation of plugin instances based on configuration.
+//! It maintains a global registry of all available plugin types and provides
+//! methods to create instances with specific configurations.
 
 use solver_types::plugins::*;
 use std::collections::HashMap;
@@ -10,22 +17,36 @@ use crate::order::{create_eip7683_processor, Eip7683Config, Eip7683OrderPlugin};
 use crate::settlement::{DirectSettlementConfig, DirectSettlementPlugin};
 use crate::state::{FileConfig, FileStatePlugin, InMemoryConfig, InMemoryStatePlugin};
 
-/// Global plugin factory instance
 use std::sync::OnceLock;
 
+/// Global plugin factory instance for system-wide plugin management.
 static GLOBAL_FACTORY: OnceLock<PluginFactory> = OnceLock::new();
 
-/// Get the global plugin factory
+/// Get the global plugin factory instance.
+///
+/// Returns a reference to the singleton plugin factory that is initialized
+/// with all built-in plugins. This factory is used throughout the system
+/// for plugin creation.
 pub fn global_plugin_factory() -> &'static PluginFactory {
 	GLOBAL_FACTORY.get_or_init(create_builtin_plugin_factory)
 }
 
-/// Unified plugin factory registry
+/// Unified plugin factory registry.
+///
+/// Maintains registries of factory instances for each plugin type, enabling
+/// dynamic plugin creation based on type identifiers and configurations.
+/// The factory supports registration of new plugin types at runtime and
+/// provides introspection capabilities for available plugins.
 pub struct PluginFactory {
+	/// Registry of state plugin factories
 	state_factories: HashMap<String, Box<dyn StatePluginFactory>>,
+	/// Registry of discovery plugin factories
 	discovery_factories: HashMap<String, Box<dyn DiscoveryPluginFactory>>,
+	/// Registry of delivery plugin factories
 	delivery_factories: HashMap<String, Box<dyn DeliveryPluginFactory>>,
+	/// Registry of settlement plugin factories
 	settlement_factories: HashMap<String, Box<dyn SettlementPluginFactory>>,
+	/// Registry of order processor factories
 	order_processor_factories: HashMap<String, Box<dyn OrderProcessorFactory>>,
 }
 

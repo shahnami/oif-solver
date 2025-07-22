@@ -14,6 +14,7 @@ NC='\033[0m' # No Color
 
 # Configuration
 API_BASE="http://localhost:8080"
+METRICS_BASE="http://localhost:9090"
 REFRESH_INTERVAL=3
 
 # Function to clear screen and show header
@@ -21,7 +22,7 @@ show_header() {
     clear
     echo -e "${BLUE}🚀 OIF Solver Service - Real-time Monitor${NC}"
     echo -e "${BLUE}===========================================${NC}"
-    echo -e "${CYAN}API: $API_BASE | Refresh: ${REFRESH_INTERVAL}s | Time: $(date '+%H:%M:%S')${NC}"
+    echo -e "${CYAN}API: $API_BASE | Metrics: $METRICS_BASE | Refresh: ${REFRESH_INTERVAL}s | Time: $(date '+%H:%M:%S')${NC}"
     echo ""
 }
 
@@ -36,113 +37,143 @@ check_api_status() {
     fi
 }
 
-# Function to get and display discovery status
-show_discovery_status() {
-    echo -e "${YELLOW}📡 Discovery Status${NC}"
-    echo "==================="
+# Function to get and display service health
+show_service_health() {
+    echo -e "${YELLOW}🏥 Service Health${NC}"
+    echo "================="
     
-    local response=$(curl -s "$API_BASE/api/v1/discovery/status" 2>/dev/null)
+    local response=$(curl -s "$API_BASE/health" 2>/dev/null)
     
     if [ $? -eq 0 ] && [ -n "$response" ]; then
-        local is_running=$(echo "$response" | jq -r '.is_running // false' 2>/dev/null)
-        local sources=$(echo "$response" | jq -r '.sources // {}' 2>/dev/null)
+        local status=$(echo "$response" | jq -r '.status // "unknown"' 2>/dev/null)
+        local services=$(echo "$response" | jq -r '.services // {}' 2>/dev/null)
         
-        if [ "$is_running" = "true" ]; then
-            echo -e "${GREEN}🟢 Discovery Manager: RUNNING${NC}"
-        else
-            echo -e "${RED}🔴 Discovery Manager: STOPPED${NC}"
-        fi
+        # Overall status
+        case "$status" in
+            "healthy")
+                echo -e "${GREEN}🟢 Overall Status: HEALTHY${NC}"
+                ;;
+            "degraded")
+                echo -e "${YELLOW}🟡 Overall Status: DEGRADED${NC}"
+                ;;
+            "unhealthy")
+                echo -e "${RED}🔴 Overall Status: UNHEALTHY${NC}"
+                ;;
+            "starting")
+                echo -e "${BLUE}🔵 Overall Status: STARTING${NC}"
+                ;;
+            "stopping")
+                echo -e "${MAGENTA}🟣 Overall Status: STOPPING${NC}"
+                ;;
+            *)
+                echo -e "${CYAN}⚪ Overall Status: $status${NC}"
+                ;;
+        esac
         
-        # Show source details
-        if [ "$sources" != "{}" ] && [ "$sources" != "null" ]; then
-            echo -e "${BLUE}Sources:${NC}"
-            echo "$sources" | jq -r 'to_entries[] | "  \(.key): \(.value.status // "unknown")"' 2>/dev/null || echo "  Unable to parse sources"
-        else
-            echo -e "${YELLOW}  No active sources${NC}"
-        fi
+        # Individual service status
+        echo -e "${BLUE}Service Components:${NC}"
+        local discovery=$(echo "$services" | jq -r '.discovery // false' 2>/dev/null)
+        local delivery=$(echo "$services" | jq -r '.delivery // false' 2>/dev/null)
+        local state=$(echo "$services" | jq -r '.state // false' 2>/dev/null)
+        local event_processor=$(echo "$services" | jq -r '.event_processor // false' 2>/dev/null)
+        
+        [ "$discovery" = "true" ] && echo -e "  Discovery:        ${GREEN}✓${NC}" || echo -e "  Discovery:        ${RED}✗${NC}"
+        [ "$delivery" = "true" ] && echo -e "  Delivery:         ${GREEN}✓${NC}" || echo -e "  Delivery:         ${RED}✗${NC}"
+        [ "$state" = "true" ] && echo -e "  State:            ${GREEN}✓${NC}" || echo -e "  State:            ${RED}✗${NC}"
+        [ "$event_processor" = "true" ] && echo -e "  Event Processor:  ${GREEN}✓${NC}" || echo -e "  Event Processor:  ${RED}✗${NC}"
     else
-        echo -e "${RED}❌ Unable to fetch discovery status${NC}"
+        echo -e "${RED}❌ Unable to fetch service health${NC}"
     fi
     echo ""
 }
 
-# Function to get and display discovery statistics
-show_discovery_stats() {
-    echo -e "${YELLOW}📊 Discovery Statistics${NC}"
-    echo "======================="
+# Function to check readiness
+show_readiness() {
+    echo -e "${YELLOW}🚦 Readiness Status${NC}"
+    echo "=================="
     
-    local response=$(curl -s "$API_BASE/api/v1/discovery/stats" 2>/dev/null)
+    local live_status=$(curl -s -o /dev/null -w "%{http_code}" "$API_BASE/health/live" 2>/dev/null)
+    local ready_status=$(curl -s -o /dev/null -w "%{http_code}" "$API_BASE/health/ready" 2>/dev/null)
     
-    if [ $? -eq 0 ] && [ -n "$response" ]; then
-        local total_events=$(echo "$response" | jq -r '.total_events_discovered // 0' 2>/dev/null)
-        local active_sources=$(echo "$response" | jq -r '.total_sources_active // 0' 2>/dev/null)
-        local total_errors=$(echo "$response" | jq -r '.total_errors // 0' 2>/dev/null)
-        local events_per_min=$(echo "$response" | jq -r '.events_per_minute // 0' 2>/dev/null)
-        local duplicates=$(echo "$response" | jq -r '.duplicate_events_filtered // 0' 2>/dev/null)
-        local last_activity=$(echo "$response" | jq -r '.last_activity_timestamp // null' 2>/dev/null)
-        
-        echo -e "${CYAN}  Total Events Discovered: $total_events${NC}"
-        echo -e "${CYAN}  Active Sources: $active_sources${NC}"
-        echo -e "${CYAN}  Events per Minute: $(printf "%.2f" $events_per_min)${NC}"
-        echo -e "${CYAN}  Total Errors: $total_errors${NC}"
-        echo -e "${CYAN}  Duplicates Filtered: $duplicates${NC}"
-        
-        if [ "$last_activity" != "null" ] && [ -n "$last_activity" ]; then
-            local activity_time=$(date -d "@$last_activity" '+%H:%M:%S' 2>/dev/null || echo "unknown")
-            echo -e "${CYAN}  Last Activity: $activity_time${NC}"
-        else
-            echo -e "${CYAN}  Last Activity: None${NC}"
-        fi
+    if [ "$live_status" = "200" ]; then
+        echo -e "${GREEN}  Liveness:  ✅ ALIVE${NC}"
     else
-        echo -e "${RED}❌ Unable to fetch discovery statistics${NC}"
+        echo -e "${RED}  Liveness:  ❌ NOT ALIVE${NC}"
+    fi
+    
+    if [ "$ready_status" = "200" ]; then
+        echo -e "${GREEN}  Readiness: ✅ READY${NC}"
+    else
+        echo -e "${YELLOW}  Readiness: ⚠️  NOT READY${NC}"
     fi
     echo ""
 }
 
-# Function to show plugin health
-show_plugin_health() {
-    echo -e "${YELLOW}🔌 Plugin Health${NC}"
+# Function to show current configuration
+show_config() {
+    echo -e "${YELLOW}⚙️  Configuration${NC}"
     echo "==============="
     
-    local response=$(curl -s "$API_BASE/api/v1/plugins/health" 2>/dev/null)
+    local response=$(curl -s "$API_BASE/api/v1/admin/config" 2>/dev/null)
     
     if [ $? -eq 0 ] && [ -n "$response" ]; then
-        local summary=$(echo "$response" | jq -r '.summary // {}' 2>/dev/null)
-        local healthy=$(echo "$summary" | jq -r '.healthy_plugins // 0' 2>/dev/null)
-        local unhealthy=$(echo "$summary" | jq -r '.unhealthy_plugins // 0' 2>/dev/null)
+        # Extract solver address from order plugin config
+        local solver_address=$(echo "$response" | jq -r '.plugins.order // {} | to_entries[0].value.config.solver_address // "unknown"' 2>/dev/null)
         
-        echo -e "${GREEN}  Healthy Plugins: $healthy${NC}"
-        echo -e "${RED}  Unhealthy Plugins: $unhealthy${NC}"
+        # Extract unique chain IDs from all plugin configs
+        local unique_chains=$(echo "$response" | jq -r '[
+            (.plugins.discovery // {} | to_entries[].value.config.chain_id // empty),
+            (.plugins.delivery // {} | to_entries[].value.config.chain_id // empty)
+        ] | unique | length' 2>/dev/null || echo "0")
         
-        # Show individual plugin status
         local plugins=$(echo "$response" | jq -r '.plugins // {}' 2>/dev/null)
-        if [ "$plugins" != "{}" ] && [ "$plugins" != "null" ]; then
-            echo -e "${BLUE}  Plugin Details:${NC}"
-            echo "$plugins" | jq -r 'to_entries[] | "    \(.key): \(.value.status // "unknown")"' 2>/dev/null || echo "    Unable to parse plugin details"
+        
+        if [ "$solver_address" != "unknown" ]; then
+            echo -e "${CYAN}  Solver Address: ${solver_address:0:10}...${solver_address: -8}${NC}"
+        else
+            echo -e "${YELLOW}  Solver Address: Not configured${NC}"
         fi
+        
+        echo -e "${CYAN}  Configured Chains: $unique_chains${NC}"
+        
+        # Show plugin types with enabled status
+        local discovery_count=$(echo "$plugins" | jq '.discovery // {} | to_entries | map(select(.value.enabled == true)) | length' 2>/dev/null || echo "0")
+        local delivery_count=$(echo "$plugins" | jq '.delivery // {} | to_entries | map(select(.value.enabled == true)) | length' 2>/dev/null || echo "0")
+        local settlement_count=$(echo "$plugins" | jq '.settlement // {} | to_entries | map(select(.value.enabled == true)) | length' 2>/dev/null || echo "0")
+        local order_count=$(echo "$plugins" | jq '.order // {} | to_entries | map(select(.value.enabled == true)) | length' 2>/dev/null || echo "0")
+        local state_count=$(echo "$plugins" | jq '.state // {} | to_entries | map(select(.value.enabled == true)) | length' 2>/dev/null || echo "0")
+        
+        echo -e "${CYAN}  Discovery Plugins: $discovery_count enabled${NC}"
+        echo -e "${CYAN}  Delivery Plugins: $delivery_count enabled${NC}"
+        echo -e "${CYAN}  Settlement Plugins: $settlement_count enabled${NC}"
+        echo -e "${CYAN}  Order Plugins: $order_count enabled${NC}"
+        echo -e "${CYAN}  State Plugins: $state_count enabled${NC}"
     else
-        echo -e "${RED}❌ Unable to fetch plugin health${NC}"
+        echo -e "${RED}❌ Unable to fetch configuration${NC}"
     fi
     echo ""
 }
 
-# Function to show recent events (if implemented)
-show_recent_events() {
-    echo -e "${YELLOW}📋 Recent Events${NC}"
-    echo "================"
+# Function to show metrics (if available)
+show_metrics() {
+    echo -e "${YELLOW}📊 Metrics${NC}"
+    echo "========="
     
-    local response=$(curl -s "$API_BASE/api/v1/events/recent?limit=5" 2>/dev/null)
+    local response=$(curl -s "$METRICS_BASE/metrics" 2>/dev/null)
     
     if [ $? -eq 0 ] && [ -n "$response" ]; then
-        local events=$(echo "$response" | jq -r '. // []' 2>/dev/null)
+        # Parse simple metrics
+        local solver_health=$(echo "$response" | grep "solver_health" | grep -v "#" | awk '{print $2}' 2>/dev/null || echo "0")
         
-        if [ "$events" != "[]" ] && [ "$events" != "null" ]; then
-            echo "$events" | jq -r '.[] | "  \(.timestamp | todate): \(.event_type) - \(.id)"' 2>/dev/null || echo "  Unable to parse events"
+        if [ "$solver_health" = "1" ]; then
+            echo -e "${GREEN}  Solver Health Metric: 1 (Healthy)${NC}"
         else
-            echo -e "${CYAN}  No recent events${NC}"
+            echo -e "${RED}  Solver Health Metric: $solver_health${NC}"
         fi
+        
+        # Add more metrics parsing as they become available
     else
-        echo -e "${CYAN}  Recent events endpoint not available${NC}"
+        echo -e "${CYAN}  Metrics endpoint not available${NC}"
     fi
     echo ""
 }
@@ -207,11 +238,12 @@ show_network_status() {
 show_commands() {
     echo -e "${YELLOW}🛠️  Helpful Commands${NC}"
     echo "==================="
-    echo -e "${BLUE}  Send Intent:     ${CYAN}./send_intent.sh${NC}"
-    echo -e "${BLUE}  Check Balances:  ${CYAN}./send_intent.sh balances${NC}"
-    echo -e "${BLUE}  Health Check:    ${CYAN}curl $API_BASE/health${NC}"
-    echo -e "${BLUE}  Start Discovery: ${CYAN}curl -X POST $API_BASE/api/v1/discovery/start${NC}"
-    echo -e "${BLUE}  Stop Discovery:  ${CYAN}curl -X POST $API_BASE/api/v1/discovery/stop${NC}"
+    echo -e "${BLUE}  Send Intent:      ${CYAN}./scripts/demo/send_intent.sh${NC}"
+    echo -e "${BLUE}  Check Balances:   ${CYAN}./scripts/demo/send_intent.sh balances${NC}"
+    echo -e "${BLUE}  Health Check:     ${CYAN}curl $API_BASE/health | jq${NC}"
+    echo -e "${BLUE}  Get Order:        ${CYAN}curl $API_BASE/api/v1/orders/{order_id} | jq${NC}"
+    echo -e "${BLUE}  Get Settlement:   ${CYAN}curl $API_BASE/api/v1/settlements/{settlement_id} | jq${NC}"
+    echo -e "${BLUE}  View Config:      ${CYAN}curl $API_BASE/api/v1/admin/config | jq${NC}"
     echo ""
 }
 
@@ -228,10 +260,10 @@ monitor_continuous() {
         show_header
         
         if check_api_status; then
-            show_discovery_status
-            show_discovery_stats
-            show_plugin_health
-            show_recent_events
+            show_service_health
+            show_readiness
+            show_config
+            show_metrics
             show_network_status
             show_solver_logs
             show_commands
@@ -256,10 +288,10 @@ check_status() {
     show_header
     
     if check_api_status; then
-        show_discovery_status
-        show_discovery_stats
-        show_plugin_health
-        show_recent_events
+        show_service_health
+        show_readiness
+        show_config
+        show_metrics
         show_network_status
         show_solver_logs
         show_commands
@@ -280,10 +312,9 @@ test_endpoints() {
     
     local endpoints=(
         "/health:Health Check"
-        "/api/v1/discovery/status:Discovery Status"
-        "/api/v1/discovery/stats:Discovery Stats"
-        "/api/v1/plugins/health:Plugin Health"
-        "/api/v1/events/recent:Recent Events"
+        "/health/live:Liveness Probe"
+        "/health/ready:Readiness Probe"
+        "/api/v1/admin/config:Configuration"
     )
     
     for endpoint_info in "${endpoints[@]}"; do
@@ -296,11 +327,23 @@ test_endpoints() {
         if [ "$status_code" = "200" ]; then
             echo -e "${GREEN}  ✅ $endpoint - HTTP $status_code${NC}"
         elif [ "$status_code" = "404" ]; then
-            echo -e "${YELLOW}  ⚠️  $endpoint - HTTP $status_code (Not Implemented)${NC}"
+            echo -e "${YELLOW}  ⚠️  $endpoint - HTTP $status_code (Not Found)${NC}"
+        elif [ "$status_code" = "503" ]; then
+            echo -e "${YELLOW}  ⚠️  $endpoint - HTTP $status_code (Service Unavailable)${NC}"
         else
             echo -e "${RED}  ❌ $endpoint - HTTP $status_code${NC}"
         fi
     done
+    
+    # Test metrics endpoint separately
+    echo -e "${YELLOW}Testing Metrics endpoint...${NC}"
+    local metrics_status=$(curl -s -o /dev/null -w "%{http_code}" "$METRICS_BASE/metrics" 2>/dev/null)
+    if [ "$metrics_status" = "200" ]; then
+        echo -e "${GREEN}  ✅ /metrics - HTTP $metrics_status (on port 9090)${NC}"
+    else
+        echo -e "${CYAN}  ℹ️  /metrics - HTTP $metrics_status (on port 9090)${NC}"
+    fi
+    
     echo ""
 }
 
@@ -312,14 +355,15 @@ show_usage() {
     echo "  monitor (default) - Continuous real-time monitoring"
     echo "  status           - One-time status check"
     echo "  test             - Test all API endpoints"
-    echo "  discovery        - Only discovery information"
-    echo "  plugins          - Only plugin health"
+    echo "  health           - Only health information"
+    echo "  config           - Only configuration"
     echo "  network          - Only network status"
     echo "  -h, --help       - Show this help"
     echo ""
     echo "Environment variables:"
     echo "  REFRESH_INTERVAL - Refresh interval in seconds (default: 3)"
     echo "  API_BASE         - API base URL (default: http://localhost:8080)"
+    echo "  METRICS_BASE     - Metrics URL (default: http://localhost:9090)"
     exit 0
 }
 
@@ -330,6 +374,10 @@ fi
 
 if [ -n "$MONITOR_API_BASE" ]; then
     API_BASE=$MONITOR_API_BASE
+fi
+
+if [ -n "$MONITOR_METRICS_BASE" ]; then
+    METRICS_BASE=$MONITOR_METRICS_BASE
 fi
 
 # Handle help
@@ -350,16 +398,16 @@ case "$COMMAND" in
     "test")
         test_endpoints
         ;;
-    "discovery")
+    "health")
         show_header
         check_api_status
-        show_discovery_status
-        show_discovery_stats
+        show_service_health
+        show_readiness
         ;;
-    "plugins")
+    "config")
         show_header
         check_api_status
-        show_plugin_health
+        show_config
         ;;
     "network")
         show_header

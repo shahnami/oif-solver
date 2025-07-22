@@ -1,3 +1,12 @@
+//! # Solver Service Binary
+//!
+//! Main entry point for the OIF solver service.
+//!
+//! This binary provides a command-line interface for running the solver system,
+//! including configuration validation, service startup, and graceful shutdown.
+//! It orchestrates all solver components and provides HTTP and metrics endpoints
+//! for monitoring and interaction.
+
 use anyhow::{Context, Result};
 use clap::{Parser, Subcommand};
 use solver_config::ConfigLoader;
@@ -11,25 +20,30 @@ use tracing_subscriber::{layer::SubscriberExt, util::SubscriberInitExt};
 mod api;
 mod service;
 
+/// Command-line interface for the solver service.
 #[derive(Parser)]
 #[command(name = "solver-service")]
 #[command(about = "OIF Solver Service", long_about = None)]
 struct Cli {
+	/// Subcommand to execute
 	#[command(subcommand)]
 	command: Option<Commands>,
 
+	/// Path to configuration file
 	#[arg(short, long, value_name = "FILE", default_value = "config/local.toml")]
 	config: PathBuf,
 
+	/// Logging level for the service
 	#[arg(long, env = "SOLVER_LOG_LEVEL", default_value = "info")]
 	log_level: String,
 }
 
+/// Available subcommands for the solver service.
 #[derive(Subcommand)]
 enum Commands {
-	/// Start the solver service
+	/// Start the solver service with full orchestration
 	Start,
-	/// Validate the configuration file
+	/// Validate the configuration file without starting services
 	Validate,
 }
 
@@ -47,6 +61,10 @@ async fn main() -> Result<()> {
 	}
 }
 
+/// Start the solver service with full orchestration.
+///
+/// Loads configuration, creates the orchestrator, starts all services,
+/// and runs until a shutdown signal is received.
 async fn start_service(cli: Cli) -> Result<()> {
 	info!("Starting OIF Solver Service");
 	info!("Loading configuration from: {:?}", cli.config);
@@ -113,6 +131,10 @@ async fn start_service(cli: Cli) -> Result<()> {
 	Ok(())
 }
 
+/// Validate configuration file without starting services.
+///
+/// Loads and validates the configuration file, checking that all
+/// plugins are properly configured and requirements are met.
 async fn validate_config(cli: Cli) -> Result<()> {
 	info!("Validating configuration file: {:?}", cli.config);
 

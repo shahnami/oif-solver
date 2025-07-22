@@ -1,4 +1,20 @@
-// solver-settlement/src/lib.rs
+//! # Settlement Service
+//!
+//! Manages cross-chain settlement operations and dispute resolution.
+//!
+//! This crate provides the settlement service that monitors confirmed fills for
+//! settlement readiness conditions, manages oracle attestations, handles disputes,
+//! and coordinates the settlement process through plugin-based strategies.
+//! It tracks claim windows, monitors attestation status, and emits settlement
+//! ready events when conditions are met.
+//!
+//! ## Key Features
+//!
+//! - **Fill Monitoring**: Tracks confirmed fills for settlement conditions
+//! - **Oracle Integration**: Monitors oracle attestations and dispute status
+//! - **Claim Window Management**: Enforces timing constraints for settlements
+//! - **Dispute Handling**: Manages dispute detection and resolution processes
+//! - **Settlement Strategies**: Supports multiple settlement plugins with fallback
 
 use solver_types::configs::SettlementConfig;
 use solver_types::events::{Event, SettlementReadyEvent};
@@ -14,36 +30,76 @@ use tokio::sync::RwLock;
 use tokio::time::interval;
 use tracing::{debug, error, info, warn};
 
-/// Monitored fill awaiting settlement
+/// Utility function to truncate hashes for display purposes.
+fn truncate_hash(hash: &str) -> String {
+	if hash.len() <= 12 {
+		hash.to_string()
+	} else {
+		format!("{}...{}", &hash[..6], &hash[hash.len() - 4..])
+	}
+}
+
+/// Represents a fill being monitored for settlement conditions.
+///
+/// Tracks all information needed to monitor a confirmed fill through the
+/// settlement process, including oracle attestations, claim windows, and
+/// readiness status.
 #[derive(Debug, Clone)]
 pub struct MonitoredFill {
+	/// The original fill event being monitored
 	pub fill_event: FillEvent,
+	/// Extracted fill data for settlement processing
 	pub fill_data: FillData,
+	/// Type of order being settled
 	pub order_type: String,
+	/// Name of the settlement plugin handling this fill
 	pub plugin_name: String,
+	/// Timestamp of last settlement condition check
 	pub last_check: u64,
+	/// Current oracle attestation status
 	pub attestation_status: Option<AttestationStatus>,
+	/// Settlement claim window information
 	pub claim_window: Option<ClaimWindow>,
+	/// Current settlement readiness status
 	pub readiness: Option<SettlementReadiness>,
 }
 
-/// Dispute tracking
+/// Tracks dispute information and resolution status.
+///
+/// Maintains the state of disputes that occur during the settlement process,
+/// including resolution outcomes and timing information.
 #[derive(Debug, Clone)]
 pub struct DisputeTracker {
+	/// Fill event that is being disputed
 	pub fill_event: FillEvent,
+	/// Details of the dispute
 	pub dispute_data: DisputeData,
+	/// Settlement plugin handling the dispute
 	pub plugin_name: String,
+	/// Resolution outcome if dispute is resolved
 	pub resolution: Option<DisputeResolution>,
+	/// Timestamp when dispute was first detected
 	pub created_at: u64,
 }
 
-/// Settlement orchestration service that monitors fills and emits settlement ready events
+/// Settlement orchestration service that monitors fills and coordinates settlement.
+///
+/// The settlement service manages the complex process of cross-chain settlement
+/// by monitoring confirmed fills, checking oracle attestations, managing claim
+/// windows, handling disputes, and emitting settlement ready events when
+/// all conditions are satisfied.
 pub struct SettlementService {
+	/// Registry of available settlement plugins by name
 	settlement_plugins: Arc<RwLock<HashMap<String, Arc<dyn SettlementPlugin>>>>,
+	/// Service configuration including strategies and timing
 	config: SettlementConfig,
+	/// Currently monitored fills awaiting settlement
 	monitored_fills: Arc<RwLock<HashMap<String, MonitoredFill>>>,
+	/// Active disputes being tracked
 	active_disputes: Arc<RwLock<HashMap<String, DisputeTracker>>>,
+	/// Event sink for emitting settlement ready events
 	event_sink: Option<EventSink<Event>>,
+	/// Shutdown flag for stopping monitoring loop
 	shutdown: Arc<RwLock<bool>>,
 }
 
@@ -55,6 +111,7 @@ impl Default for SettlementService {
 				default_strategy: "direct_settlement".to_string(),
 				fallback_strategies: vec![],
 				profit_threshold_wei: "0".to_string(),
+				monitor_interval_seconds: 10,
 			},
 			monitored_fills: Arc::new(RwLock::new(HashMap::new())),
 			active_disputes: Arc::new(RwLock::new(HashMap::new())),
@@ -65,10 +122,15 @@ impl Default for SettlementService {
 }
 
 impl SettlementService {
+	/// Create a new settlement service with default configuration.
 	pub fn new() -> Self {
 		Self::default()
 	}
 
+	/// Create a settlement service with the specified configuration.
+	///
+	/// # Arguments
+	/// * `config` - Settlement service configuration including strategies and timing
 	pub fn with_config(config: SettlementConfig) -> Self {
 		Self {
 			settlement_plugins: Arc::new(RwLock::new(HashMap::new())),
@@ -80,16 +142,30 @@ impl SettlementService {
 		}
 	}
 
-	/// Set the event sink for emitting settlement ready events
+	/// Set the event sink for emitting settlement ready events.
+	///
+	/// # Arguments
+	/// * `sink` - Event sink for forwarding settlement ready events
 	pub fn set_event_sink(&mut self, sink: EventSink<Event>) {
 		self.event_sink = Some(sink);
 	}
 
-	/// Monitor a fill event for settlement conditions
+	/// Begin monitoring a confirmed fill for settlement conditions.
+	///
+	/// Adds the fill to the monitoring queue and begins tracking oracle
+	/// attestations, claim windows, and dispute status. Only confirmed fills
+	/// are monitored for settlement.
+	///
+	/// # Arguments
+	/// * `fill_event` - The confirmed fill event to monitor
+	///
+	/// # Returns
+	/// Success if monitoring starts, error otherwise
 	pub async fn monitor_fill(&self, fill_event: FillEvent) -> PluginResult<()> {
 		info!(
 			"Starting to monitor fill {} for order {}",
-			fill_event.fill_id, fill_event.order_id
+			truncate_hash(&fill_event.fill_id),
+			truncate_hash(&fill_event.order_id)
 		);
 
 		// Only monitor confirmed fills
@@ -134,13 +210,17 @@ impl SettlementService {
 		Ok(())
 	}
 
-	/// Start the monitoring loop
+	/// Start the background monitoring loop for all tracked fills.
+	///
+	/// Spawns a background task that periodically checks all monitored fills
+	/// for settlement readiness conditions. The loop runs at the configured
+	/// monitoring interval until shutdown is requested.
 	pub async fn start_monitoring(&self) {
-		info!("Starting settlement monitoring loop");
+		let interval_secs = self.config.monitor_interval_seconds;
 		let service = self.clone();
 
 		tokio::spawn(async move {
-			let mut ticker = interval(Duration::from_secs(10)); // Check every 10 seconds
+			let mut ticker = interval(Duration::from_secs(interval_secs));
 
 			loop {
 				ticker.tick().await;
@@ -223,7 +303,7 @@ impl SettlementService {
 
 		// Handle dispute if newly detected
 		if is_newly_disputed {
-			info!("Dispute detected for fill {}", fill_id);
+			info!("Dispute detected for fill {}", truncate_hash(fill_id));
 
 			// Create dispute data from oracle information
 			let dispute_data = DisputeData {
@@ -240,7 +320,11 @@ impl SettlementService {
 			// Handle the dispute
 			match self.handle_dispute(fill_id, dispute_data).await {
 				Ok(resolution) => {
-					info!("Dispute handled for fill {}: {:?}", fill_id, resolution);
+					info!(
+						"Dispute handled for fill {}: {:?}",
+						truncate_hash(fill_id),
+						resolution
+					);
 				}
 				Err(e) => {
 					error!("Failed to handle dispute for fill {}: {}", fill_id, e);
@@ -250,7 +334,7 @@ impl SettlementService {
 
 		// If ready, emit settlement ready event
 		if readiness.is_ready {
-			info!("Fill {} is ready for settlement", fill_id);
+			info!("Fill {} is ready for settlement", truncate_hash(fill_id));
 			self.emit_settlement_ready_event(monitored_fill).await?;
 
 			// Remove from monitoring
@@ -313,7 +397,7 @@ impl SettlementService {
 			})?;
 			info!(
 				"Emitted SettlementReadyEvent for fill {}",
-				monitored_fill.fill_event.fill_id
+				truncate_hash(&monitored_fill.fill_event.fill_id)
 			);
 		} else {
 			warn!("No event sink configured, cannot emit SettlementReadyEvent");
@@ -322,7 +406,18 @@ impl SettlementService {
 		Ok(())
 	}
 
-	/// Handle a dispute for a monitored fill
+	/// Handle a dispute for a monitored fill.
+	///
+	/// Processes dispute information through the appropriate settlement plugin
+	/// and tracks the dispute resolution outcome. Creates a dispute tracker
+	/// to maintain dispute state.
+	///
+	/// # Arguments
+	/// * `fill_id` - ID of the fill being disputed
+	/// * `dispute_data` - Details of the dispute
+	///
+	/// # Returns
+	/// The dispute resolution outcome
 	pub async fn handle_dispute(
 		&self,
 		fill_id: &str,
@@ -396,7 +491,12 @@ impl SettlementService {
 	/// Register a new settlement plugin
 	pub async fn register_plugin(&self, name: String, plugin: Arc<dyn SettlementPlugin>) {
 		info!("Registering settlement plugin: {}", name);
-		self.settlement_plugins.write().await.insert(name, plugin);
+		info!("Starting {}", name);
+		self.settlement_plugins
+			.write()
+			.await
+			.insert(name.clone(), plugin);
+		info!("{} started successfully", name);
 	}
 
 	/// Stop monitoring
@@ -406,14 +506,22 @@ impl SettlementService {
 	}
 }
 
-/// Builder for SettlementService
+/// Builder for constructing SettlementService instances.
+///
+/// Provides a fluent interface for configuring settlement services with
+/// plugins, event sinks, and configuration options. Handles plugin
+/// initialization during the build process.
 pub struct SettlementServiceBuilder {
+	/// Settlement plugins to register with their configurations
 	plugins: Vec<(String, Box<dyn SettlementPlugin>, PluginConfig)>,
+	/// Service configuration
 	config: SettlementConfig,
+	/// Optional event sink for settlement ready events
 	event_sink: Option<EventSink<Event>>,
 }
 
 impl SettlementServiceBuilder {
+	/// Create a new settlement service builder with default configuration.
 	pub fn new() -> Self {
 		Self {
 			plugins: Vec::new(),
@@ -421,16 +529,27 @@ impl SettlementServiceBuilder {
 				default_strategy: "direct_settlement".to_string(),
 				fallback_strategies: vec![],
 				profit_threshold_wei: "0".to_string(),
+				monitor_interval_seconds: 10,
 			},
 			event_sink: None,
 		}
 	}
 
+	/// Set the event sink for settlement ready events.
+	///
+	/// # Arguments
+	/// * `event_sink` - Event sink for forwarding settlement events
 	pub fn with_event_sink(mut self, event_sink: EventSink<Event>) -> Self {
 		self.event_sink = Some(event_sink);
 		self
 	}
 
+	/// Add a settlement plugin to be registered with the service.
+	///
+	/// # Arguments
+	/// * `name` - Unique name for the plugin
+	/// * `plugin` - Settlement plugin implementation
+	/// * `config` - Plugin-specific configuration
 	pub fn with_plugin(
 		mut self,
 		name: String,
@@ -441,11 +560,23 @@ impl SettlementServiceBuilder {
 		self
 	}
 
+	/// Set the settlement service configuration.
+	///
+	/// # Arguments
+	/// * `config` - Service configuration including strategies and timing
 	pub fn with_config(mut self, config: SettlementConfig) -> Self {
 		self.config = config;
 		self
 	}
 
+	/// Build the settlement service with all configured plugins.
+	///
+	/// Initializes all plugins, sets up the event sink, and creates the
+	/// service instance. Plugin initialization failures are logged but
+	/// do not prevent service creation.
+	///
+	/// # Returns
+	/// Configured settlement service ready for monitoring
 	pub async fn build(self) -> SettlementService {
 		let mut service = SettlementService::with_config(self.config);
 
@@ -459,7 +590,7 @@ impl SettlementServiceBuilder {
 			// Initialize the plugin before registering
 			match plugin.initialize(plugin_config).await {
 				Ok(_) => {
-					info!("Successfully initialized settlement plugin: {}", name);
+					debug!("Successfully initialized settlement plugin: {}", name);
 					service.register_plugin(name, Arc::from(plugin)).await;
 				}
 				Err(e) => {
