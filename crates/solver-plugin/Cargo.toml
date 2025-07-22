@@ -1,0 +1,51 @@
+# solver-plugins/Cargo.toml - Updated to match existing structure
+
+[package]
+name = "solver-plugin"
+version.workspace = true
+edition.workspace = true
+authors.workspace = true
+license.workspace = true
+repository.workspace = true
+
+[dependencies]
+# Internal dependencies
+solver-types = { path = "../solver-types" }
+
+# Async runtime
+tokio.workspace = true
+async-trait.workspace = true
+
+# Ethereum (already included in workspace)
+ethers.workspace = true
+alloy.workspace = true
+
+# Serialization
+serde.workspace = true
+serde_json.workspace = true
+
+# Logging
+tracing.workspace = true
+
+# HTTP client
+reqwest.workspace = true
+
+# Error handling
+thiserror.workspace = true
+anyhow.workspace = true
+
+# Common utilities
+hex.workspace = true
+backoff.workspace = true
+priority-queue.workspace = true
+dashmap.workspace = true
+bytes.workspace = true
+rand = "0.8"
+libc = "0.2"
+md5 = "0.8.0"
+base64 = "0.21"
+
+[dev-dependencies]
+tokio-test = "0.4"
+tempfile = "3.8"
+wiremock = "0.5"

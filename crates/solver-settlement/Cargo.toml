@@ -7,33 +7,22 @@ license.workspace = true
 repository.workspace = true
 
 [dependencies]
+# Internal dependencies
 solver-types = { path = "../solver-types" }
-solver-chains = { path = "../solver-chains" }
-solver-state = { path = "../solver-state" }
-solver-discovery = { path = "../solver-discovery" }
-solver-config = { path = "../solver-config" }
-solver-delivery = { path = "../solver-delivery" }
-solver-orders = { path = "../solver-orders" }
 
-# Async
-tokio = { workspace = true }
-async-trait = { workspace = true }
-futures = { workspace = true }
+# Async runtime
+tokio.workspace = true
+async-trait.workspace = true
+futures.workspace = true
 
-# Ethereum
-ethers = { workspace = true }
+# Logging
+tracing.workspace = true
 
-# Serialization  
-serde = { workspace = true }
-serde_json = { workspace = true }
+# Common utilities
+uuid.workspace = true
+bytes.workspace = true
+chrono.workspace = true
 
 # Error handling
-thiserror = { workspace = true }
-anyhow = { workspace = true }
-
-# Utilities
-tracing = { workspace = true }
-chrono = { workspace = true }
-dashmap = { workspace = true }
-
-hex = { workspace = true }
+thiserror.workspace = true
+anyhow.workspace = true

@@ -1,21 +1,22 @@
-//! Core types and traits for the OIF solver system.
+//! # Solver Types
 //!
-//! This crate defines the fundamental abstractions that all solver components
-//! implement and interact with.
+//! Core type definitions shared across all solver components.
+//!
+//! This crate provides the fundamental data structures, enums, and traits
+//! that define the interfaces and data models used throughout the solver
+//! system. It includes configuration types, event definitions, and plugin
+//! interfaces that enable the modular architecture of the solver.
+//!
+//! ## Modules
+//!
+//! - **configs**: Configuration structures for all solver components
+//! - **events**: Event types for the event-driven architecture
+//! - **plugins**: Plugin interfaces and base traits for extensibility
 
-pub mod chains;
-pub mod common;
-pub mod errors;
+pub mod configs;
 pub mod events;
-pub mod oracles;
-pub mod orders;
-pub mod settlement;
-pub mod standards;
+pub mod plugins;
 
-// Re-export commonly used types
-pub use chains::{ChainAdapter, ChainId};
-pub use common::{Address, Bytes32, TxHash, U256};
-pub use errors::{Result, SolverError};
-pub use oracles::{Attestation, Oracle};
-pub use orders::{Input, Order, OrderId, OrderSemantics, OrderStandard, Output};
-pub use settlement::SettlementStrategy;
+pub use configs::*;
+pub use events::*;
+pub use plugins::*;

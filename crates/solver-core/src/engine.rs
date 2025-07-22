@@ -1,836 +1,1494 @@
-//! Core solver engine that orchestrates the solving process.
+//! # Orchestrator Engine
+//!
+//! The central orchestration engine that coordinates all solver operations.
+//!
+//! This module provides the main `Orchestrator` struct that manages the lifecycle
+//! of the solver system, coordinates between different services (discovery, delivery,
+//! settlement, state), and processes events throughout the order lifecycle.
+//!
+//! ## Key Components
+//!
+//! - **Orchestrator**: The main coordinator that manages all solver operations
+//! - **OrchestratorBuilder**: Builder pattern for creating orchestrator instances
+//! - **Event Processing**: Handles all events in the order lifecycle
+//! - **Health Monitoring**: Monitors the health of all system components
+//! - **Transaction Monitoring**: Tracks pending transactions and settlements
 
-use solver_delivery::DeliveryService;
-use solver_types::{
-	chains::Transaction,
-	common::{Address, TxHash, U256},
-	errors::{Result, SolverError},
-	orders::{FillData, FillInstruction, Order, OrderStatus},
+use crate::{
+	error::CoreError,
+	lifecycle::{LifecycleManager, LifecycleState},
+	utils::truncate_hash,
 };
+use serde::{Deserialize, Serialize};
+use solver_config::{ConfigError, ConfigLoader};
+use solver_delivery::{DeliveryService, DeliveryServiceBuilder};
+use solver_discovery::{DiscoveryService, DiscoveryServiceBuilder};
+use solver_plugin::factory::global_plugin_factory;
+use solver_settlement::{SettlementService, SettlementServiceBuilder};
+use solver_state::{StateService, StateServiceBuilder};
+use solver_types::plugins::*;
+use solver_types::{Event, EventType, SettlementReadyEvent, *};
+use std::collections::HashMap;
 use std::sync::Arc;
-use tokio::sync::RwLock;
-use tracing::{debug, error, info, warn};
+use std::time::Duration;
+use tokio::sync::{broadcast, mpsc, Mutex, RwLock};
+use tokio::task::JoinSet;
+use tracing::{debug, info, warn};
 
-/// Main solver engine
-pub struct SolverEngine {
-	/// Order processor
-	processor: Arc<OrderProcessor>,
-	/// Engine state
-	state: Arc<RwLock<EngineState>>,
+/// Create a state plugin from configuration.
+///
+/// Creates and validates a state plugin instance based on the provided configuration.
+/// The plugin is validated before being returned to ensure it meets the required interface.
+///
+/// # Arguments
+/// * `config` - The plugin configuration specifying type and settings
+///
+/// # Returns
+/// A configured and validated state plugin instance
+///
+/// # Errors
+/// Returns `CoreError::Plugin` if plugin creation or validation fails
+fn create_state_plugin(config: &PluginConfig) -> Result<Arc<dyn StatePlugin>, CoreError> {
+	let factory = global_plugin_factory();
+
+	let plugin = factory
+		.create_state_plugin(&config.plugin_type, config.clone())
+		.map_err(CoreError::Plugin)?;
+
+	// Validate config before using the plugin
+	BasePlugin::validate_config(plugin.as_ref(), config).map_err(CoreError::Plugin)?;
+
+	Ok(plugin)
 }
 
-/// Engine state
-#[derive(Default)]
-struct EngineState {
-	pub is_running: bool,
-	pub processed_orders: u64,
-	pub failed_orders: u64,
+/// Create a delivery plugin from configuration.
+///
+/// Creates and validates a delivery plugin instance based on the provided configuration.
+/// The plugin is validated before being returned to ensure it meets the required interface.
+///
+/// # Arguments
+/// * `config` - The plugin configuration specifying type and settings
+///
+/// # Returns
+/// A configured and validated delivery plugin instance
+///
+/// # Errors
+/// Returns `CoreError::Plugin` if plugin creation or validation fails
+fn create_delivery_plugin(config: &PluginConfig) -> Result<Box<dyn DeliveryPlugin>, CoreError> {
+	let factory = global_plugin_factory();
+
+	let plugin = factory
+		.create_delivery_plugin(&config.plugin_type, config.clone())
+		.map_err(CoreError::Plugin)?;
+
+	// Validate config before using the plugin
+	BasePlugin::validate_config(plugin.as_ref(), config).map_err(CoreError::Plugin)?;
+
+	Ok(plugin)
 }
 
-/// Order processor handles individual order execution
-#[derive(Clone)]
-pub struct OrderProcessor {
-	/// Chain registry for cross-chain operations
-	chain_registry: Arc<solver_chains::ChainRegistry>,
-	/// Delivery service for transaction submission
-	delivery_service: Arc<solver_delivery::DeliveryServiceImpl>,
-	/// Settlement manager for claiming
-	settlement_manager: Arc<solver_settlement::SettlementManager>,
-	/// State manager for order updates
-	state_manager: Arc<solver_state::StateManager>,
-	/// Solver's address
-	solver_address: Address,
-	/// Minimum profit threshold in basis points
-	min_profit_bps: u16,
+/// Create a discovery plugin from configuration.
+///
+/// Creates and validates a discovery plugin instance based on the provided configuration.
+/// The plugin is validated before being returned to ensure it meets the required interface.
+///
+/// # Arguments
+/// * `config` - The plugin configuration specifying type and settings
+///
+/// # Returns
+/// A configured and validated discovery plugin instance
+///
+/// # Errors
+/// Returns `CoreError::Plugin` if plugin creation or validation fails
+fn create_discovery_plugin(config: &PluginConfig) -> Result<Box<dyn DiscoveryPlugin>, CoreError> {
+	let factory = global_plugin_factory();
+
+	let plugin = factory
+		.create_discovery_plugin(&config.plugin_type, config.clone())
+		.map_err(CoreError::Plugin)?;
+
+	// Validate config before using the plugin
+	BasePlugin::validate_config(plugin.as_ref(), config).map_err(CoreError::Plugin)?;
+
+	Ok(plugin)
 }
 
-impl SolverEngine {
-	pub fn new(
-		chain_registry: Arc<solver_chains::ChainRegistry>,
-		delivery_service: Arc<solver_delivery::DeliveryServiceImpl>,
-		settlement_manager: Arc<solver_settlement::SettlementManager>,
-		state_manager: Arc<solver_state::StateManager>,
-		solver_address: Address,
-		min_profit_bps: u16,
-	) -> Self {
-		Self {
-			processor: Arc::new(OrderProcessor::new(
-				chain_registry,
-				delivery_service,
-				settlement_manager,
-				state_manager,
-				solver_address,
-				min_profit_bps,
-			)),
-			state: Arc::new(RwLock::new(EngineState::default())),
-		}
+/// Create a settlement plugin from configuration.
+///
+/// Creates and validates a settlement plugin instance based on the provided configuration.
+/// The plugin is validated before being returned to ensure it meets the required interface.
+///
+/// # Arguments
+/// * `config` - The plugin configuration specifying type and settings
+///
+/// # Returns
+/// A configured and validated settlement plugin instance
+///
+/// # Errors
+/// Returns `CoreError::Plugin` if plugin creation or validation fails
+fn create_settlement_plugin(config: &PluginConfig) -> Result<Box<dyn SettlementPlugin>, CoreError> {
+	let factory = global_plugin_factory();
+
+	let plugin = factory
+		.create_settlement_plugin(&config.plugin_type, config.clone())
+		.map_err(CoreError::Plugin)?;
+
+	// Validate config before using the plugin
+	BasePlugin::validate_config(plugin.as_ref(), config).map_err(CoreError::Plugin)?;
+
+	Ok(plugin)
+}
+
+/// Create an order processor from configuration.
+///
+/// Creates an order processor instance based on the provided configuration.
+/// Order processors handle the transformation of orders into executable transactions.
+///
+/// # Arguments
+/// * `config` - The plugin configuration specifying type and settings
+///
+/// # Returns
+/// A configured order processor instance
+///
+/// # Errors
+/// Returns `CoreError::Plugin` if processor creation fails
+fn create_order_processor(config: &PluginConfig) -> Result<Arc<dyn OrderProcessor>, CoreError> {
+	let factory = global_plugin_factory();
+
+	let processor = factory
+		.create_order_processor(&config.plugin_type, config.clone())
+		.map_err(CoreError::Plugin)?;
+
+	Ok(processor)
+}
+
+/// Event sender type alias for clarity.
+///
+/// Used throughout the system to send events between components.
+/// This unbounded sender allows components to emit events without blocking.
+pub type EventSender = mpsc::UnboundedSender<Event>;
+
+/// Health status report for all solver services.
+///
+/// Provides a comprehensive view of the health status of all major components
+/// in the solver system, including individual service health and overall status.
+#[derive(Debug, Clone)]
+pub struct HealthReport {
+	/// Health status of the discovery service
+	pub discovery_healthy: bool,
+	/// Health status of the delivery service
+	pub delivery_healthy: bool,
+	/// Health status of the settlement service
+	pub settlement_healthy: bool,
+	/// Health status of the state service
+	pub state_healthy: bool,
+	/// Health status of the event processing system
+	pub event_processor_healthy: bool,
+	/// Overall system health status
+	pub overall_status: ServiceStatus,
+}
+
+/// Order information with current status and settlement details.
+///
+/// Contains the complete order data along with its current processing status
+/// and any associated settlement information.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct OrderInfo {
+	/// The original order event data
+	pub order: OrderEvent,
+	/// Current processing status of the order
+	pub status: String,
+	/// Settlement ID if the order has been settled
+	pub settlement_id: Option<String>,
+}
+
+/// Core orchestrator that coordinates all solver components.
+///
+/// The orchestrator is the central coordinator of the solver system. It manages
+/// the lifecycle of all services, processes events, monitors transactions,
+/// and maintains the overall state of the system.
+///
+/// ## Architecture
+///
+/// The orchestrator follows an event-driven architecture where:
+/// - Discovery services emit order discovery events
+/// - Order events trigger delivery processing
+/// - Successful deliveries trigger settlement monitoring
+/// - All state changes are tracked and persisted
+///
+/// ## Event Flow
+///
+/// 1. Discovery plugins find new orders and emit `DiscoveryEvent`
+/// 2. Orders are converted to `OrderEvent` and processed
+/// 3. Delivery service processes orders and emits `FillEvent`
+/// 4. Settlement service monitors fills and emits `SettlementEvent`
+/// 5. All events are persisted in the state service
+pub struct Orchestrator {
+	/// System configuration with plugin settings
+	config: Arc<RwLock<SolverConfig>>,
+
+	/// Core service instances
+	discovery_service: Arc<DiscoveryService>,
+	delivery_service: Arc<DeliveryService>,
+	settlement_service: Arc<SettlementService>,
+	state_service: Arc<StateService>,
+
+	/// Event coordination channels owned by the orchestrator
+	event_tx: EventSender,
+	event_rx: Arc<Mutex<mpsc::UnboundedReceiver<Event>>>,
+
+	/// Manages orchestrator lifecycle and shutdown coordination
+	lifecycle_manager: Arc<LifecycleManager>,
+
+	/// Broadcast channel for shutdown coordination
+	shutdown_tx: broadcast::Sender<()>,
+
+	/// Background task management
+	tasks: Arc<Mutex<JoinSet<Result<(), CoreError>>>>,
+
+	/// Pending fills being monitored for confirmation
+	pending_fills: Arc<RwLock<HashMap<String, FillEvent>>>,
+
+	/// Pending settlement transactions being monitored
+	pending_settlements: Arc<RwLock<HashMap<String, SettlementEvent>>>,
+}
+
+impl Orchestrator {
+	/// Start the orchestrator and all services.
+	///
+	/// Initializes and starts all services in the correct order, begins event processing,
+	/// and sets up monitoring systems. This is the main entry point for starting
+	/// the solver system.
+	///
+	/// # Service Startup Order
+	///
+	/// 1. State service initialization
+	/// 2. Discovery service startup
+	/// 3. Delivery service preparation
+	/// 4. Settlement service monitoring
+	/// 5. Event processing loop
+	/// 6. Health monitoring
+	/// 7. Transaction monitoring
+	///
+	/// # Returns
+	/// Returns `Ok(())` if all services start successfully
+	///
+	/// # Errors
+	/// Returns `CoreError` if any service fails to start or initialize
+	pub async fn start(&self) -> Result<(), CoreError> {
+		info!("Starting orchestrator");
+
+		// Initialize lifecycle
+		self.lifecycle_manager.initialize().await?;
+
+		// Start services in order
+		self.start_state_service().await?;
+		self.start_discovery_service().await?;
+		self.start_delivery_service().await?;
+		self.start_settlement_service().await?;
+
+		// Start event processing
+		self.start_event_processing().await?;
+
+		// Start health monitoring
+		self.start_health_monitor().await?;
+
+		// Start fill monitoring
+		self.start_fill_monitor().await?;
+
+		// Mark as running
+		self.lifecycle_manager.start().await?;
+
+		info!("Orchestrator started successfully");
+		Ok(())
 	}
 
-	/// Start the solver engine
-	pub async fn start(&self) -> Result<()> {
-		info!("Starting solver engine");
+	async fn start_state_service(&self) -> Result<(), CoreError> {
+		info!("Starting state service");
 
-		let mut state = self.state.write().await;
-		state.is_running = true;
+		// Initialize the state service with its configured backend
+		self.state_service.initialize().await.map_err(|e| {
+			CoreError::ServiceInit(format!("Failed to initialize state service: {}", e))
+		})?;
+
+		// Start cleanup task
+		self.state_service.start_cleanup_task().await;
+
+		info!("State service started successfully");
+		Ok(())
+	}
+
+	async fn start_discovery_service(&self) -> Result<(), CoreError> {
+		info!("Starting discovery service");
+
+		// Start all registered discovery plugins
+		self.discovery_service.start_all().await.map_err(|e| {
+			CoreError::ServiceInit(format!("Failed to start discovery service: {}", e))
+		})?;
+
+		info!("Discovery service started successfully");
+		Ok(())
+	}
+
+	async fn start_delivery_service(&self) -> Result<(), CoreError> {
+		info!("Starting delivery service");
+
+		// Delivery service doesn't have a specific start method
+		// It's ready to use once created with plugins
+		// TODO: Add health check to verify all configured plugins are ready
+
+		info!("Delivery service started successfully");
+		Ok(())
+	}
+
+	async fn start_settlement_service(&self) -> Result<(), CoreError> {
+		info!("Starting settlement service");
+
+		// Start the settlement monitoring loop
+		self.settlement_service.start_monitoring().await;
+
+		info!("Settlement service started successfully");
+		Ok(())
+	}
+
+	async fn start_event_processing(&self) -> Result<(), CoreError> {
+		info!("Starting event processing");
+
+		let orchestrator = self.clone();
+		let mut tasks = self.tasks.lock().await;
+
+		tasks.spawn(async move { orchestrator.process_events().await });
 
 		Ok(())
 	}
 
-	/// Stop the solver engine
-	pub async fn stop(&self) -> Result<()> {
-		info!("Stopping solver engine");
+	/// Main event processing loop
+	async fn process_events(&self) -> Result<(), CoreError> {
+		let mut event_rx = self.event_rx.lock().await;
+		let mut shutdown_rx = self.lifecycle_manager.subscribe_shutdown();
 
-		let mut state = self.state.write().await;
-		state.is_running = false;
+		loop {
+			tokio::select! {
+				Some(event) = event_rx.recv() => {
+					debug!("Processing event: {:?}", event);
 
-		Ok(())
-	}
-
-	/// Process a discovered order
-	pub async fn process_order<O>(&self, order: O) -> Result<()>
-	where
-		O: Order + 'static,
-	{
-		let order_id = order.id();
-		debug!("Processing order {}", order_id);
-
-		// Validate order
-		if let Err(e) = order.validate().await {
-			warn!("Order {} validation failed: {}", order_id, e);
-			let mut state = self.state.write().await;
-			state.failed_orders += 1;
-			return Err(e);
-		}
-
-		// Process order (placeholder for now)
-		self.processor.process(order).await?;
-
-		let mut state = self.state.write().await;
-		state.processed_orders += 1;
-
-		Ok(())
-	}
-
-	/// Get engine statistics
-	pub async fn stats(&self) -> EngineStats {
-		let state = self.state.read().await;
-		EngineStats {
-			is_running: state.is_running,
-			processed_orders: state.processed_orders,
-			failed_orders: state.failed_orders,
-		}
-	}
-}
-
-impl OrderProcessor {
-	pub fn new(
-		chain_registry: Arc<solver_chains::ChainRegistry>,
-		delivery_service: Arc<solver_delivery::DeliveryServiceImpl>,
-		settlement_manager: Arc<solver_settlement::SettlementManager>,
-		state_manager: Arc<solver_state::StateManager>,
-		solver_address: Address,
-		min_profit_bps: u16,
-	) -> Self {
-		Self {
-			chain_registry,
-			delivery_service,
-			settlement_manager,
-			state_manager,
-			solver_address,
-			min_profit_bps,
-		}
-	}
-
-	pub async fn process<O>(&self, order: O) -> Result<()>
-	where
-		O: Order + 'static,
-	{
-		let order_id = order.id();
-		info!("Starting to process order {}", order_id);
-
-		// 1. Check profitability
-		if !self.check_profitability(&order).await? {
-			warn!("Order {} not profitable, skipping", order_id);
-			self.state_manager
-				.update_order_status(
-					&order_id,
-					OrderStatus::Abandoned,
-					Some("Not profitable".to_string()),
-				)
-				.await?;
-			return Ok(());
-		}
-
-		// 2. Get fill instructions
-		let fill_instructions = order.to_fill_instructions().await?;
-		if fill_instructions.is_empty() {
-			error!("No fill instructions for order {}", order_id);
-			return Err(SolverError::Order("No fill instructions".to_string()));
-		}
-
-		// 3. Fill on destination
-		let (fill_tx, fill_timestamp) = self.execute_fill(&order, &fill_instructions[0]).await?;
-		info!("Order {} filled with tx {}", order_id, fill_tx);
-
-		// Update order status to Filled
-		self.state_manager
-			.update_order_status(&order_id, OrderStatus::Filled, None)
-			.await?;
-
-		// 4. Register fill with settlement manager
-		self.settlement_manager
-			.register_fill(&order, fill_tx, fill_timestamp, None)
-			.await?;
-
-		info!(
-			"Order {} processing complete, fill registered for settlement",
-			order_id
-		);
-
-		Ok(())
-	}
-
-	/// Check if order is profitable
-	async fn check_profitability<O>(&self, order: &O) -> Result<bool>
-	where
-		O: Order,
-	{
-		// Simple profitability check - can be enhanced
-		// For now, just check if we have minimum profit threshold
-
-		// In a real implementation, you would:
-		// 1. Calculate input value
-		// 2. Calculate output value
-		// 3. Estimate gas costs
-		// 4. Check if profit > gas + minimum threshold
-
-		debug!("Checking profitability for order {}", order.id());
-
-		// For POC, always return true if min_profit_bps is 0
-		if self.min_profit_bps == 0 {
-			return Ok(true);
-		}
-
-		// TODO: Implement actual profitability calculation
-		Ok(true)
-	}
-
-	/// Execute fill on destination chain
-	async fn execute_fill<O>(
-		&self,
-		order: &O,
-		instruction: &FillInstruction,
-	) -> Result<(TxHash, Option<u64>)>
-	where
-		O: Order,
-	{
-		info!(
-			"Executing fill for order {} on chain {}",
-			order.id(),
-			instruction.destination_chain
-		);
-
-		// Get chain adapter (unused for now, but will be needed for more complex fills)
-		let _chain = self
-			.chain_registry
-			.get_required(&instruction.destination_chain)?;
-
-		// Build fill transaction
-		let fill_tx = self.build_fill_transaction(order, instruction)?;
-
-		// Debug log the transaction details
-		info!(
-			"Fill transaction - to: {}, data: 0x{}, value: {}",
-			fill_tx.to,
-			ethers::utils::hex::encode(&fill_tx.data),
-			fill_tx.value
-		);
-
-		// Estimate gas
-		match self
-			.delivery_service
-			.estimate_gas(instruction.destination_chain, &fill_tx)
-			.await
-		{
-			Ok(estimate) => {
-				info!("Gas estimate for fill: {}", estimate);
-			}
-			Err(e) => {
-				error!("Failed to estimate gas: {}", e);
-				return Err(e);
-			}
-		}
-
-		// Submit transaction
-		let tx_hash = self
-			.delivery_service
-			.submit_transaction(instruction.destination_chain, fill_tx)
-			.await?;
-		info!("Fill transaction submitted: {}", tx_hash);
-
-		// Wait for confirmation using chain-specific configuration
-		let chain_adapter = self
-			.chain_registry
-			.get_required(&instruction.destination_chain)?;
-		let confirmations = chain_adapter.confirmations();
-
-		let receipt = self
-			.delivery_service
-			.wait_for_confirmation(instruction.destination_chain, tx_hash, confirmations)
-			.await?;
-
-		if !receipt.status {
-			error!("Fill transaction failed for order {}", order.id());
-			return Err(SolverError::Order("Fill transaction failed".to_string()));
-		}
-
-		Ok((tx_hash, receipt.timestamp))
-	}
-
-	/// Build fill transaction
-	fn build_fill_transaction<O>(
-		&self,
-		order: &O,
-		instruction: &FillInstruction,
-	) -> Result<Transaction>
-	where
-		O: Order,
-	{
-		// TODO: This is a simplified version - actual implementation would need proper ABI encoding
-
-		use ethers::abi::{encode, Token};
-
-		let _order_id = order.id();
-
-		// Extract fill data based on type
-		let call_data = match &instruction.fill_data {
-			FillData::EIP7683 {
-				order_id,
-				origin_data,
-			} => {
-				debug!(
-					"Fill data - orderId: 0x{}, originData: 0x{} ({} bytes)",
-					ethers::utils::hex::encode(order_id.as_ref()),
-					ethers::utils::hex::encode(origin_data),
-					origin_data.len()
-				);
-
-				// Encode fill function call
-				// Function: fill(bytes32 orderId, bytes originData, bytes fillerData)
-				// The fillerData should contain the solver address as bytes32
-				let mut filler_data = vec![0u8; 32];
-				// Copy solver address (20 bytes) to the last 20 bytes of the 32-byte array
-				filler_data[12..32].copy_from_slice(self.solver_address.as_ref());
-
-				let tokens = vec![
-					Token::FixedBytes(order_id.as_ref().to_vec()),
-					Token::Bytes(origin_data.clone()),
-					Token::Bytes(filler_data),
-				];
-
-				// Function selector for fill(bytes32,bytes,bytes)
-				let selector = ethers::utils::keccak256(b"fill(bytes32,bytes,bytes)")[..4].to_vec();
-				let encoded = encode(&tokens);
-
-				[selector, encoded].concat()
-			}
-			FillData::Generic(data) => data.clone(),
-		};
-
-		// Parse value from MandateOutput if this is an EIP7683 order
-		let value = match &instruction.fill_data {
-			FillData::EIP7683 { origin_data, .. } => {
-				// Try to parse the output amount from MandateOutput
-				// The originData contains an ABI-encoded MandateOutput struct
-				// For now, we'll check if it's the expected format and extract the amount
-				if origin_data.len() >= 32 + 96 + 32 {
-					// Read offset
-					let offset = U256::from_big_endian(&origin_data[0..32]).as_usize();
-					if origin_data.len() >= offset + 192 {
-						// Check if token is ETH (address 0)
-						let token_start = offset + 96;
-						let token_end = token_start + 32;
-						let is_eth = if origin_data.len() >= token_end {
-							let token_bytes = &origin_data[token_start..token_end];
-							token_bytes.iter().all(|&b| b == 0)
-						} else {
-							false
-						};
-
-						// Amount is at offset + 128 (after oracle, settler, chainId, token)
-						let amount_start = offset + 128;
-						let amount_end = amount_start + 32;
-						if origin_data.len() >= amount_end {
-							let amount =
-								U256::from_big_endian(&origin_data[amount_start..amount_end]);
-							info!("Parsed output amount from MandateOutput: {}", amount);
-							// Only include value in transaction if token is ETH
-							if is_eth {
-								amount
-							} else {
-								U256::zero()
-							}
-						} else {
-							U256::zero()
-						}
-					} else {
-						U256::zero()
+					if let Err(e) = self.handle_event(event).await {
+						warn!("Error handling event: {}", e);
 					}
-				} else {
-					U256::zero()
+				}
+				_ = shutdown_rx.recv() => {
+					info!("Event processor received shutdown signal");
+					break;
 				}
 			}
-			_ => U256::zero(),
+		}
+
+		Ok(())
+	}
+
+	/// Handle a single event
+	// State management helper functions
+	async fn store_event(
+		&self,
+		event_type: &str,
+		event_id: &str,
+		event_data: &impl serde::Serialize,
+		ttl_days: u64,
+	) -> Result<(), CoreError> {
+		let event_key = format!("events:{}:{}", event_type, event_id);
+		let data = serde_json::to_vec(event_data)
+			.map_err(|e| CoreError::Serialization(format!("Failed to serialize event: {}", e)))?;
+
+		self.state_service
+			.set_with_ttl(
+				&event_key,
+				data.into(),
+				std::time::Duration::from_secs(ttl_days * 24 * 60 * 60),
+			)
+			.await
+			.map_err(|e| CoreError::State(format!("Failed to store event: {}", e)))?;
+
+		Ok(())
+	}
+
+	async fn store_order(
+		&self,
+		order_id: &str,
+		order_data: &impl serde::Serialize,
+	) -> Result<(), CoreError> {
+		let order_key = format!("orders:{}", order_id);
+		let data = serde_json::to_vec(order_data)
+			.map_err(|e| CoreError::Serialization(format!("Failed to serialize order: {}", e)))?;
+
+		self.state_service
+			.set(&order_key, data.into())
+			.await
+			.map_err(|e| CoreError::State(format!("Failed to store order: {}", e)))?;
+
+		Ok(())
+	}
+
+	async fn update_order_status(&self, order_id: &str, status: &str) -> Result<(), CoreError> {
+		let status_key = format!("orders:status:{}", order_id);
+		self.state_service
+			.set(&status_key, status.as_bytes().to_vec().into())
+			.await
+			.map_err(|e| CoreError::State(format!("Failed to update order status: {}", e)))?;
+
+		// Apply TTL based on status
+		match status {
+			"failed" | "cancelled" => {
+				// Apply 24 hour TTL to failed/cancelled orders
+				let order_key = format!("orders:{}", order_id);
+				if let Ok(Some(order_data)) = self.state_service.get(&order_key).await {
+					self.state_service
+						.set_with_ttl(
+							&order_key,
+							order_data,
+							std::time::Duration::from_secs(24 * 60 * 60),
+						)
+						.await
+						.ok();
+				}
+			}
+			"filled" => {
+				// Apply 7 day TTL to completed orders
+				let order_key = format!("orders:{}", order_id);
+				if let Ok(Some(order_data)) = self.state_service.get(&order_key).await {
+					self.state_service
+						.set_with_ttl(
+							&order_key,
+							order_data,
+							std::time::Duration::from_secs(7 * 24 * 60 * 60),
+						)
+						.await
+						.ok();
+				}
+			}
+			_ => {} // No TTL for active orders
+		}
+
+		Ok(())
+	}
+
+	async fn store_settlement(
+		&self,
+		settlement_id: &str,
+		order_id: &str,
+		settlement_data: &impl serde::Serialize,
+	) -> Result<(), CoreError> {
+		// Store settlement data
+		let settlement_key = format!("settlements:{}", settlement_id);
+		let data = serde_json::to_vec(settlement_data).map_err(|e| {
+			CoreError::Serialization(format!("Failed to serialize settlement: {}", e))
+		})?;
+
+		self.state_service
+			.set(&settlement_key, data.into())
+			.await
+			.map_err(|e| CoreError::State(format!("Failed to store settlement: {}", e)))?;
+
+		// Map order to settlement
+		let order_settlement_key = format!("settlements:by_order:{}", order_id);
+		self.state_service
+			.set(
+				&order_settlement_key,
+				settlement_id.as_bytes().to_vec().into(),
+			)
+			.await
+			.ok();
+
+		Ok(())
+	}
+
+	async fn handle_event(&self, event: Event) -> Result<(), CoreError> {
+		match event {
+			Event::Discovery(discovery_event) => self.handle_discovery_event(discovery_event).await,
+			Event::OrderCreated(order_event) => self.handle_order_created_event(order_event).await,
+			Event::OrderFill(fill_event) => self.handle_order_fill_event(fill_event).await,
+			Event::SettlementReady(ready_event) => {
+				self.handle_settlement_ready_event(ready_event).await
+			}
+			Event::Settlement(settlement_event) => {
+				self.handle_settlement_event(settlement_event).await
+			}
+			Event::ServiceStatus(status_event) => {
+				self.handle_service_status_event(status_event).await
+			}
+		}
+	}
+
+	async fn handle_discovery_event(&self, event: DiscoveryEvent) -> Result<(), CoreError> {
+		debug!("Processing discovery event: {}", truncate_hash(&event.id));
+
+		// Store event in state with 30 day TTL
+		self.store_event("discovery", &event.id, &event, 30).await?;
+
+		debug!("Stored discovery event {} in state", event.id);
+
+		// Convert to order if applicable
+		if event.event_type == EventType::OrderCreated {
+			let order_event = OrderEvent {
+				order_id: event.id.clone(),
+				chain_id: event.chain_id,
+				user: event
+					.parsed_data
+					.as_ref()
+					.and_then(|d| d.user.clone())
+					.unwrap_or_default(),
+				timestamp: event.timestamp,
+				metadata: event.metadata.source_specific.clone(),
+				source: event.source.clone(),
+				contract_address: event
+					.parsed_data
+					.as_ref()
+					.and_then(|d| d.contract_address.clone()),
+				raw_data: event.raw_data.clone(),
+			};
+
+			self.event_tx
+				.send(Event::OrderCreated(order_event))
+				.map_err(|_| CoreError::Channel("Failed to send order event".to_string()))?;
+		}
+
+		Ok(())
+	}
+
+	async fn handle_order_created_event(&self, event: OrderEvent) -> Result<(), CoreError> {
+		info!("Order created: {}", truncate_hash(&event.order_id));
+
+		// Store order and set initial status
+		self.store_order(&event.order_id, &event).await?;
+		self.update_order_status(&event.order_id, "discovered")
+			.await?;
+
+		debug!("Stored order {} with status 'discovered'", event.order_id);
+
+		// Use delivery service to process the order
+		match self
+			.delivery_service
+			.process_order_to_transaction(&event)
+			.await
+		{
+			Ok(Some(transaction_request)) => {
+				info!(
+					"Creating transaction request for order {}",
+					truncate_hash(&event.order_id)
+				);
+
+				// Update order status to processing
+				self.update_order_status(&event.order_id, "processing")
+					.await?;
+
+				// Submit the transaction request
+				match self
+					.delivery_service
+					.execute_transaction(transaction_request)
+					.await
+				{
+					Ok(response) => {
+						info!(
+							"Order {} delivered: tx_hash={}",
+							truncate_hash(&event.order_id),
+							truncate_hash(&response.tx_hash)
+						);
+
+						// Update order status based on delivery response
+						let status = match response.status {
+							DeliveryStatus::Confirmed => "filled",
+							DeliveryStatus::Failed
+							| DeliveryStatus::Dropped
+							| DeliveryStatus::Replaced => "failed",
+							_ => "processing", // Keep as processing for pending states
+						};
+
+						self.update_order_status(&event.order_id, status).await?;
+
+						let fill_event = FillEvent {
+							order_id: event.order_id.clone(),
+							fill_id: response.tx_hash.clone(),
+							chain_id: response.chain_id,
+							tx_hash: response.tx_hash.clone(),
+							timestamp: response.submitted_at,
+							status: match response.status {
+								DeliveryStatus::Submitted => FillStatus::Pending,
+								DeliveryStatus::Pending => FillStatus::Pending,
+								DeliveryStatus::Confirmed => FillStatus::Confirmed,
+								DeliveryStatus::Failed => {
+									FillStatus::Failed("Delivery failed".to_string())
+								}
+								DeliveryStatus::Dropped => {
+									FillStatus::Failed("Transaction dropped".to_string())
+								}
+								DeliveryStatus::Replaced => {
+									FillStatus::Failed("Transaction replaced".to_string())
+								}
+							},
+							source: event.source.clone(),
+							order_data: Some(event.raw_data.clone()),
+						};
+
+						if let Err(e) = self.event_tx.send(Event::OrderFill(fill_event)) {
+							warn!("Failed to send OrderFill event: {}", e);
+						}
+					}
+					Err(e) => {
+						// Update order status to failed
+						self.update_order_status(&event.order_id, "failed")
+							.await
+							.ok();
+
+						warn!(
+							"Failed to deliver order {}: {}",
+							truncate_hash(&event.order_id),
+							e
+						);
+					}
+				}
+			}
+			Ok(None) => {
+				warn!(
+					"No delivery request created for order {}",
+					truncate_hash(&event.order_id)
+				);
+				// Update status to indicate no action taken
+				self.update_order_status(&event.order_id, "no_action")
+					.await
+					.ok();
+			}
+			Err(e) => {
+				warn!(
+					"Failed to process order {}: {}",
+					truncate_hash(&event.order_id),
+					e
+				);
+				// Update order status to failed
+				self.update_order_status(&event.order_id, "failed")
+					.await
+					.ok();
+			}
+		}
+
+		Ok(())
+	}
+
+	async fn handle_order_fill_event(&self, event: FillEvent) -> Result<(), CoreError> {
+		match event.status {
+			FillStatus::Pending => {
+				// Store pending fill for monitoring
+				info!(
+					"Fill {} is pending, adding to monitoring queue",
+					truncate_hash(&event.fill_id)
+				);
+				self.pending_fills
+					.write()
+					.await
+					.insert(event.fill_id.clone(), event);
+			}
+			FillStatus::Confirmed => {
+				info!(
+					"Fill {} confirmed for order {}",
+					truncate_hash(&event.fill_id),
+					truncate_hash(&event.order_id)
+				);
+
+				// Remove from pending if it was there
+				self.pending_fills.write().await.remove(&event.fill_id);
+
+				// Send to settlement service for monitoring
+				if let Err(e) = self.settlement_service.monitor_fill(event.clone()).await {
+					warn!("Failed to start monitoring fill for settlement: {}", e);
+				}
+			}
+			FillStatus::Failed(_) => {
+				// Remove from pending if it was there
+				self.pending_fills.write().await.remove(&event.fill_id);
+
+				warn!(
+					"Fill {} failed for order {}, not processing settlement",
+					truncate_hash(&event.fill_id),
+					truncate_hash(&event.order_id)
+				);
+			}
+		}
+
+		Ok(())
+	}
+
+	async fn handle_settlement_ready_event(
+		&self,
+		event: SettlementReadyEvent,
+	) -> Result<(), CoreError> {
+		info!(
+			"Processing settlement ready event for order {} (fill: {})",
+			truncate_hash(&event.fill_event.order_id),
+			truncate_hash(&event.fill_event.fill_id)
+		);
+
+		// Use delivery service to process the fill
+		match self
+			.delivery_service
+			.process_fill_to_transaction(&event.fill_event)
+			.await
+		{
+			Ok(Some(transaction_request)) => {
+				info!(
+					"Creating settlement transaction for order {}",
+					truncate_hash(&event.fill_event.order_id)
+				);
+				// Submit the transaction request
+				match self
+					.delivery_service
+					.execute_transaction(transaction_request.clone())
+					.await
+				{
+					Ok(response) => {
+						info!(
+							"Settlement transaction submitted for order {} with tx hash: {}",
+							truncate_hash(&event.fill_event.order_id),
+							truncate_hash(&response.tx_hash)
+						);
+
+						// Create and send Settlement event to track the execution
+						let settlement_event = SettlementEvent {
+							order_id: event.fill_event.order_id.clone(),
+							settlement_id: format!(
+								"{}:{}",
+								event.fill_event.order_id, event.fill_event.fill_id
+							),
+							source_chain: transaction_request.transaction.chain_id, // Origin chain
+							destination_chain: event.fill_event.chain_id, // chain where fill happened (destination chain)
+							tx_hash: response.tx_hash,
+							timestamp: chrono::Utc::now().timestamp() as u64,
+							status: match response.status {
+								DeliveryStatus::Submitted => SettlementStatus::Pending,
+								DeliveryStatus::Pending => SettlementStatus::Pending,
+								DeliveryStatus::Confirmed => SettlementStatus::Confirmed,
+								DeliveryStatus::Failed => SettlementStatus::Failed,
+								DeliveryStatus::Dropped => SettlementStatus::Failed,
+								DeliveryStatus::Replaced => SettlementStatus::Failed,
+							},
+						};
+
+						// Add to pending settlements if status is pending
+						if matches!(settlement_event.status, SettlementStatus::Pending) {
+							self.pending_settlements
+								.write()
+								.await
+								.insert(settlement_event.tx_hash.clone(), settlement_event.clone());
+						}
+
+						if let Err(e) = self.event_tx.send(Event::Settlement(settlement_event)) {
+							warn!("Failed to send Settlement event: {}", e);
+						}
+					}
+					Err(e) => {
+						warn!(
+							"Failed to execute settlement transaction for order {}: {}",
+							truncate_hash(&event.fill_event.order_id),
+							e
+						);
+					}
+				}
+			}
+			Ok(None) => {
+				warn!(
+					"No settlement transaction created for order {}",
+					truncate_hash(&event.fill_event.order_id)
+				);
+			}
+			Err(e) => {
+				warn!(
+					"Failed to process settlement for order {}: {}",
+					truncate_hash(&event.fill_event.order_id),
+					e
+				);
+			}
+		}
+
+		Ok(())
+	}
+
+	async fn handle_settlement_event(&self, event: SettlementEvent) -> Result<(), CoreError> {
+		// Store settlement data
+		self.store_settlement(&event.settlement_id, &event.order_id, &event)
+			.await?;
+
+		// Update order status based on settlement status
+		let order_status = match event.status {
+			SettlementStatus::Confirmed => "settled",
+			SettlementStatus::Failed => "settlement_failed",
+			SettlementStatus::Challenged => "challenged",
+			SettlementStatus::Expired => "expired",
+			_ => "settling",
 		};
 
-		Ok(Transaction {
-			to: instruction.destination_contract,
-			value,
-			data: call_data,
-			gas_limit: None, // Will be estimated
-			gas_price: None, // Will be set by delivery service
-			nonce: None,     // Will be set by delivery service
+		self.update_order_status(&event.order_id, order_status)
+			.await?;
+
+		// Only log significant status changes
+		match event.status {
+			SettlementStatus::Confirmed => {
+				info!(
+					"Settlement {} confirmed for order {}",
+					truncate_hash(&event.settlement_id),
+					truncate_hash(&event.order_id)
+				);
+			}
+			SettlementStatus::Failed => {
+				warn!(
+					"Settlement {} failed for order {}",
+					truncate_hash(&event.settlement_id),
+					truncate_hash(&event.order_id)
+				);
+			}
+			SettlementStatus::Challenged => {
+				warn!(
+					"Settlement {} challenged for order {}",
+					truncate_hash(&event.settlement_id),
+					truncate_hash(&event.order_id)
+				);
+			}
+			SettlementStatus::Expired => {
+				warn!(
+					"Settlement {} expired for order {}",
+					truncate_hash(&event.settlement_id),
+					truncate_hash(&event.order_id)
+				);
+			}
+			SettlementStatus::Pending => {
+				// Add to pending settlements for monitoring
+				self.pending_settlements
+					.write()
+					.await
+					.insert(event.tx_hash.clone(), event.clone());
+
+				debug!(
+					"Settlement {} pending for order {}",
+					truncate_hash(&event.settlement_id),
+					truncate_hash(&event.order_id)
+				);
+			}
+			SettlementStatus::Cancelled => {
+				info!(
+					"Settlement {} cancelled for order {}",
+					truncate_hash(&event.settlement_id),
+					truncate_hash(&event.order_id)
+				);
+			}
+		}
+
+		Ok(())
+	}
+
+	async fn handle_service_status_event(&self, event: StatusEvent) -> Result<(), CoreError> {
+		match event.status {
+			ServiceStatus::Unhealthy => {
+				warn!(
+					"Service {} is unhealthy: {:?}",
+					event.service, event.details
+				);
+			}
+			ServiceStatus::Degraded => {
+				warn!("Service {} is degraded: {:?}", event.service, event.details);
+			}
+			_ => {
+				info!("Service {} status: {:?}", event.service, event.status);
+			}
+		}
+
+		Ok(())
+	}
+
+	async fn start_health_monitor(&self) -> Result<(), CoreError> {
+		let orchestrator = self.clone();
+		let mut tasks = self.tasks.lock().await;
+
+		tasks.spawn(async move { orchestrator.monitor_health().await });
+
+		Ok(())
+	}
+
+	async fn start_fill_monitor(&self) -> Result<(), CoreError> {
+		let orchestrator = self.clone();
+		let mut tasks = self.tasks.lock().await;
+
+		tasks.spawn(async move { orchestrator.monitor_fills().await });
+
+		Ok(())
+	}
+
+	async fn monitor_health(&self) -> Result<(), CoreError> {
+		let mut interval = tokio::time::interval(Duration::from_secs(30));
+		let mut shutdown_rx = self.lifecycle_manager.subscribe_shutdown();
+
+		loop {
+			tokio::select! {
+				_ = interval.tick() => {
+					let health = self.get_health().await;
+
+					if !matches!(health.overall_status, ServiceStatus::Healthy) {
+						warn!("System health degraded: {:?}", health);
+					}
+				}
+				_ = shutdown_rx.recv() => {
+					info!("Health monitor received shutdown signal");
+					break;
+				}
+			}
+		}
+
+		Ok(())
+	}
+
+	async fn monitor_fills(&self) -> Result<(), CoreError> {
+		let mut interval = tokio::time::interval(Duration::from_secs(5)); // Check every 5 seconds
+		let mut shutdown_rx = self.lifecycle_manager.subscribe_shutdown();
+
+		loop {
+			tokio::select! {
+				_ = interval.tick() => {
+					// Get all pending fills
+					let pending_fills: Vec<FillEvent> = {
+						let fills = self.pending_fills.read().await;
+						fills.values().cloned().collect()
+					};
+
+					// Get all pending settlements
+					let pending_settlements: Vec<SettlementEvent> = {
+						let settlements = self.pending_settlements.read().await;
+						settlements.values().cloned().collect()
+					};
+
+					if !pending_fills.is_empty() || !pending_settlements.is_empty() {
+						debug!("Monitoring {} pending fills and {} pending settlements",
+							pending_fills.len(), pending_settlements.len());
+					}
+
+					// Check status of each pending fill
+					for fill in pending_fills {
+						match self.check_fill_status(&fill).await {
+							Ok(Some(updated_status)) => {
+								if updated_status != fill.status {
+									info!(
+										"Fill {} status changed from {:?} to {:?}",
+										truncate_hash(&fill.fill_id), fill.status, updated_status
+									);
+
+									// Create updated fill event
+									let mut updated_fill = fill.clone();
+									updated_fill.status = updated_status;
+
+									// Send updated event
+									if let Err(e) = self.event_tx.send(Event::OrderFill(updated_fill)) {
+										warn!("Failed to send updated fill event: {}", e);
+									}
+								}
+							}
+							Ok(None) => {
+								// No update yet, continue monitoring
+							}
+							Err(e) => {
+								warn!("Error checking fill status for {}: {}", truncate_hash(&fill.fill_id), e);
+							}
+						}
+					}
+
+					// Check status of each pending settlement
+					for settlement in pending_settlements {
+						match self.check_settlement_status(&settlement).await {
+							Ok(Some(updated_status)) => {
+								if updated_status != settlement.status {
+									info!(
+										"Settlement {} status changed from {:?} to {:?}",
+										truncate_hash(&settlement.tx_hash), settlement.status, updated_status
+									);
+
+									// Remove from pending if confirmed or failed
+									if matches!(updated_status, SettlementStatus::Confirmed | SettlementStatus::Failed) {
+										self.pending_settlements.write().await.remove(&settlement.tx_hash);
+									}
+
+									// Create updated settlement event
+									let mut updated_settlement = settlement.clone();
+									updated_settlement.status = updated_status;
+
+									// Send updated event
+									if let Err(e) = self.event_tx.send(Event::Settlement(updated_settlement)) {
+										warn!("Failed to send updated settlement event: {}", e);
+									}
+								}
+							}
+							Ok(None) => {
+								// No update yet, continue monitoring
+							}
+							Err(e) => {
+								warn!("Error checking settlement status for {}: {}", truncate_hash(&settlement.tx_hash), e);
+							}
+						}
+					}
+				}
+				_ = shutdown_rx.recv() => {
+					info!("Transaction monitor received shutdown signal");
+					break;
+				}
+			}
+		}
+
+		Ok(())
+	}
+
+	async fn check_fill_status(&self, fill: &FillEvent) -> Result<Option<FillStatus>, CoreError> {
+		// Use delivery service to check transaction status
+		match self
+			.delivery_service
+			.get_transaction_status(&fill.tx_hash, fill.chain_id)
+			.await
+		{
+			Ok(Some(response)) => {
+				// Convert delivery status to fill status
+				let fill_status = match response.status {
+					DeliveryStatus::Submitted => FillStatus::Pending,
+					DeliveryStatus::Pending => FillStatus::Pending,
+					DeliveryStatus::Confirmed => FillStatus::Confirmed,
+					DeliveryStatus::Failed => FillStatus::Failed("Delivery failed".to_string()),
+					DeliveryStatus::Dropped => {
+						FillStatus::Failed("Transaction dropped".to_string())
+					}
+					DeliveryStatus::Replaced => {
+						FillStatus::Failed("Transaction replaced".to_string())
+					}
+				};
+				Ok(Some(fill_status))
+			}
+			Ok(None) => {
+				// No status update yet
+				Ok(None)
+			}
+			Err(e) => Err(CoreError::Delivery(format!(
+				"Failed to check transaction status: {}",
+				e
+			))),
+		}
+	}
+
+	async fn check_settlement_status(
+		&self,
+		settlement: &SettlementEvent,
+	) -> Result<Option<SettlementStatus>, CoreError> {
+		// Use delivery service to check transaction status
+		match self
+			.delivery_service
+			.get_transaction_status(&settlement.tx_hash, settlement.source_chain)
+			.await
+		{
+			Ok(Some(response)) => {
+				// Convert delivery status to settlement status
+				let settlement_status = match response.status {
+					DeliveryStatus::Submitted => SettlementStatus::Pending,
+					DeliveryStatus::Pending => SettlementStatus::Pending,
+					DeliveryStatus::Confirmed => SettlementStatus::Confirmed,
+					DeliveryStatus::Failed => SettlementStatus::Failed,
+					DeliveryStatus::Dropped => SettlementStatus::Failed,
+					DeliveryStatus::Replaced => SettlementStatus::Failed,
+				};
+				Ok(Some(settlement_status))
+			}
+			Ok(None) => {
+				// No status update yet
+				Ok(None)
+			}
+			Err(e) => Err(CoreError::Delivery(format!(
+				"Failed to check settlement transaction status: {}",
+				e
+			))),
+		}
+	}
+
+	/// Get current health status of all system components.
+	///
+	/// Performs health checks on all services and returns a comprehensive
+	/// health report. Currently returns basic status based on lifecycle state,
+	/// but can be extended to perform detailed health checks.
+	///
+	/// # Returns
+	/// A `HealthReport` containing the health status of all components
+	pub async fn get_health(&self) -> HealthReport {
+		// TODO: Implement health checks for each service
+		// For now, assume all services are healthy if lifecycle is running
+		let is_running = self.lifecycle_manager.is_running().await;
+
+		let discovery_healthy = is_running;
+		let delivery_healthy = is_running;
+		let settlement_healthy = is_running;
+
+		let state_healthy = is_running;
+		let event_processor_healthy = is_running;
+
+		let overall_status = if is_running {
+			ServiceStatus::Healthy
+		} else {
+			ServiceStatus::Unhealthy
+		};
+
+		HealthReport {
+			discovery_healthy,
+			delivery_healthy,
+			settlement_healthy,
+			state_healthy,
+			event_processor_healthy,
+			overall_status,
+		}
+	}
+
+	/// Gracefully shutdown the orchestrator and all services.
+	///
+	/// Initiates a graceful shutdown sequence by signaling all services to stop,
+	/// waiting for background tasks to complete, and cleaning up resources.
+	///
+	/// # Shutdown Process
+	///
+	/// 1. Signal lifecycle manager to begin shutdown
+	/// 2. Send shutdown signal to all background tasks
+	/// 3. Wait for all tasks to complete gracefully
+	/// 4. Clean up resources
+	///
+	/// # Returns
+	/// Returns `Ok(())` when shutdown is complete
+	///
+	/// # Errors
+	/// Returns `CoreError` if shutdown process encounters errors
+	pub async fn shutdown(&self) -> Result<(), CoreError> {
+		info!("Shutting down orchestrator");
+
+		// Signal shutdown
+		self.lifecycle_manager.shutdown().await?;
+		let _ = self.shutdown_tx.send(());
+
+		// Event processing will stop when shutdown signal is received
+		// TODO: Implement graceful shutdown in services
+		// Services should listen to shutdown signal from lifecycle manager
+
+		// Wait for all tasks
+		let mut tasks = self.tasks.lock().await;
+		tasks.shutdown().await;
+
+		info!("Orchestrator shutdown complete");
+		Ok(())
+	}
+
+	/// Update configuration
+	pub async fn update_config(&self, new_config: SolverConfig) -> Result<(), CoreError> {
+		info!("Updating configuration");
+
+		// Update config
+		*self.config.write().await = new_config.clone();
+
+		// TODO: Implement config update notification to services
+		// Services should re-initialize plugins with new config
+
+		Ok(())
+	}
+
+	/// Get order by ID
+	pub async fn get_order(&self, order_id: &str) -> Result<Option<OrderInfo>, CoreError> {
+		// Get order data
+		let order_key = format!("orders:{}", order_id);
+		let order_data = self
+			.state_service
+			.get(&order_key)
+			.await
+			.map_err(|e| CoreError::State(format!("Failed to retrieve order: {}", e)))?;
+
+		if let Some(data) = order_data {
+			// Deserialize order
+			let order: OrderEvent = serde_json::from_slice(&data).map_err(|e| {
+				CoreError::Serialization(format!("Failed to deserialize order: {}", e))
+			})?;
+
+			// Get order status
+			let status_key = format!("orders:status:{}", order_id);
+			let status_data =
+				self.state_service.get(&status_key).await.map_err(|e| {
+					CoreError::State(format!("Failed to retrieve order status: {}", e))
+				})?;
+
+			let status = status_data
+				.and_then(|data| String::from_utf8(data.to_vec()).ok())
+				.unwrap_or_else(|| "unknown".to_string());
+
+			// Get settlement if exists
+			let settlement_key = format!("settlements:by_order:{}", order_id);
+			let settlement_id = self
+				.state_service
+				.get(&settlement_key)
+				.await
+				.ok()
+				.flatten()
+				.and_then(|data| String::from_utf8(data.to_vec()).ok());
+
+			Ok(Some(OrderInfo {
+				order,
+				status,
+				settlement_id,
+			}))
+		} else {
+			Ok(None)
+		}
+	}
+
+	/// Get settlement by ID
+	pub async fn get_settlement(
+		&self,
+		settlement_id: &str,
+	) -> Result<Option<SettlementEvent>, CoreError> {
+		let settlement_key = format!("settlements:{}", settlement_id);
+		let settlement_data = self
+			.state_service
+			.get(&settlement_key)
+			.await
+			.map_err(|e| CoreError::State(format!("Failed to retrieve settlement: {}", e)))?;
+
+		if let Some(data) = settlement_data {
+			let settlement: SettlementEvent = serde_json::from_slice(&data).map_err(|e| {
+				CoreError::Serialization(format!("Failed to deserialize settlement: {}", e))
+			})?;
+			Ok(Some(settlement))
+		} else {
+			Ok(None)
+		}
+	}
+
+	/// Get current lifecycle state
+	pub async fn get_state(&self) -> LifecycleState {
+		self.lifecycle_manager.get_state().await
+	}
+
+	/// Get event sender for services to send events
+	pub fn get_event_sender(&self) -> EventSender {
+		self.event_tx.clone()
+	}
+}
+
+impl Clone for Orchestrator {
+	fn clone(&self) -> Self {
+		Self {
+			config: self.config.clone(),
+			discovery_service: self.discovery_service.clone(),
+			delivery_service: self.delivery_service.clone(),
+			settlement_service: self.settlement_service.clone(),
+			state_service: self.state_service.clone(),
+			event_tx: self.event_tx.clone(),
+			event_rx: self.event_rx.clone(),
+			lifecycle_manager: self.lifecycle_manager.clone(),
+			shutdown_tx: self.shutdown_tx.clone(),
+			tasks: self.tasks.clone(),
+			pending_fills: self.pending_fills.clone(),
+			pending_settlements: self.pending_settlements.clone(),
+		}
+	}
+}
+
+/// Builder for creating an Orchestrator instance.
+///
+/// Provides a fluent interface for configuring and building an orchestrator.
+/// Supports loading configuration from either a direct config object or
+/// from a configuration file.
+pub struct OrchestratorBuilder {
+	/// Direct configuration object
+	config: Option<SolverConfig>,
+	/// Path to configuration file
+	config_path: Option<String>,
+}
+
+impl OrchestratorBuilder {
+	/// Create a new orchestrator builder.
+	pub fn new() -> Self {
+		Self {
+			config: None,
+			config_path: None,
+		}
+	}
+
+	/// Set the configuration directly.
+	///
+	/// # Arguments
+	/// * `config` - The solver configuration to use
+	pub fn with_config(mut self, config: SolverConfig) -> Self {
+		self.config = Some(config);
+		self
+	}
+
+	/// Set the path to a configuration file.
+	///
+	/// The configuration will be loaded from this file during build.
+	///
+	/// # Arguments
+	/// * `path` - Path to the configuration file
+	pub fn with_config_file(mut self, path: impl Into<String>) -> Self {
+		self.config_path = Some(path.into());
+		self
+	}
+
+	/// Build the orchestrator instance.
+	///
+	/// Creates and configures all services, plugins, and sets up the event system.
+	/// This method loads configuration (either from direct config or file),
+	/// creates all service instances with their configured plugins, and
+	/// establishes the event coordination system.
+	///
+	/// # Returns
+	/// A fully configured `Orchestrator` instance ready to start
+	///
+	/// # Errors
+	/// Returns `CoreError` if:
+	/// - No configuration is provided
+	/// - Configuration file cannot be loaded or parsed
+	/// - Plugin creation fails
+	/// - Service initialization fails
+	pub async fn build(self) -> Result<Orchestrator, CoreError> {
+		// Load configuration either from provided config or from file
+		let config = if let Some(config) = self.config {
+			config
+		} else if let Some(config_path) = self.config_path {
+			// Load from file using ConfigLoader
+			ConfigLoader::new()
+				.with_file(&config_path)
+				.load()
+				.await
+				.map_err(|e| match e {
+					ConfigError::FileNotFound(msg) => {
+						CoreError::Configuration(format!("Config file not found: {}", msg))
+					}
+					ConfigError::ParseError(msg) => {
+						CoreError::Configuration(format!("Config parse error: {}", msg))
+					}
+					ConfigError::ValidationError(msg) => {
+						CoreError::Configuration(format!("Config validation error: {}", msg))
+					}
+					ConfigError::EnvVarNotFound(var) => {
+						CoreError::Configuration(format!("Environment variable not found: {}", var))
+					}
+					ConfigError::IoError(e) => {
+						CoreError::Configuration(format!("IO error reading config: {}", e))
+					}
+				})?
+		} else {
+			return Err(CoreError::Configuration(
+				"No configuration or config file path provided".to_string(),
+			));
+		};
+
+		let config = Arc::new(RwLock::new(config));
+
+		// Create services with their respective configurations
+		// Note: Services will handle their own plugin initialization based on config
+
+		// Create unified event channel
+		let (event_tx, event_rx) = mpsc::unbounded_channel::<Event>();
+
+		// Create services with their respective configurations
+		let config_ref = config.read().await;
+
+		// Create StateService with builder pattern
+		let mut state_builder = StateServiceBuilder::new().with_config(config_ref.state.clone());
+
+		// Register state plugins from config
+		for (name, plugin_config) in &config_ref.plugins.state {
+			if plugin_config.enabled {
+				let plugin = create_state_plugin(plugin_config)?;
+				state_builder =
+					state_builder.with_plugin(name.clone(), plugin, plugin_config.clone());
+			}
+		}
+
+		let state_service = Arc::new(state_builder.build().await);
+
+		// Create EventSink for DiscoveryService using the main event channel
+		let event_sink = EventSink::new(event_tx.clone());
+
+		// Create DiscoveryService with event sender
+		// Read values from config with defaults
+		let mut discovery_builder =
+			DiscoveryServiceBuilder::new().with_config(config_ref.discovery.clone());
+
+		// Register discovery plugins from config
+		for (name, plugin_config) in &config_ref.plugins.discovery {
+			if plugin_config.enabled {
+				let plugin = create_discovery_plugin(plugin_config)?;
+				discovery_builder =
+					discovery_builder.with_plugin(name.clone(), plugin, plugin_config.clone());
+			}
+		}
+
+		let discovery_service = Arc::new(discovery_builder.build(event_sink).await);
+
+		let mut delivery_builder =
+			DeliveryServiceBuilder::new().with_config(config_ref.delivery.clone());
+
+		// Register delivery plugins from config
+		for (name, plugin_config) in &config_ref.plugins.delivery {
+			if plugin_config.enabled {
+				let plugin = create_delivery_plugin(plugin_config)?;
+				delivery_builder =
+					delivery_builder.with_plugin(name.clone(), plugin, plugin_config.clone());
+			}
+		}
+
+		// Register order processors with delivery service
+		for (name, plugin_config) in &config_ref.plugins.order {
+			if plugin_config.enabled {
+				let processor = create_order_processor(plugin_config)?;
+				delivery_builder = delivery_builder.with_order_processor(name.clone(), processor);
+			}
+		}
+
+		let delivery_service = Arc::new(delivery_builder.build().await);
+
+		// Create SettlementService with event sink
+		// Read values from config with defaults
+		let mut settlement_builder = SettlementServiceBuilder::new()
+			.with_config(config_ref.settlement.clone())
+			.with_event_sink(EventSink::new(event_tx.clone()));
+
+		// Register settlement plugins from config
+		for (name, plugin_config) in &config_ref.plugins.settlement {
+			if plugin_config.enabled {
+				let plugin = create_settlement_plugin(plugin_config)?;
+				settlement_builder =
+					settlement_builder.with_plugin(name.clone(), plugin, plugin_config.clone());
+			}
+		}
+
+		let settlement_service = Arc::new(settlement_builder.build().await);
+
+		drop(config_ref); // Release the read lock
+
+		// Create lifecycle manager
+		let lifecycle_manager = Arc::new(LifecycleManager::new());
+
+		// Create shutdown channel
+		let (shutdown_tx, _) = broadcast::channel(16);
+
+		Ok(Orchestrator {
+			config,
+			discovery_service,
+			delivery_service,
+			settlement_service,
+			state_service,
+			event_tx,
+			event_rx: Arc::new(Mutex::new(event_rx)),
+			lifecycle_manager,
+			shutdown_tx,
+			tasks: Arc::new(Mutex::new(JoinSet::new())),
+			pending_fills: Arc::new(RwLock::new(HashMap::new())),
+			pending_settlements: Arc::new(RwLock::new(HashMap::new())),
 		})
 	}
 }
 
-/// Engine statistics
-#[derive(Debug, Clone, serde::Serialize)]
-pub struct EngineStats {
-	pub is_running: bool,
-	pub processed_orders: u64,
-	pub failed_orders: u64,
-}
-
-#[cfg(test)]
-mod tests {
-	use super::*;
-	use async_trait::async_trait;
-	use solver_types::{
-		chains::ChainId,
-		common::{Bytes32, Timestamp},
-		orders::{Input, OrderId, OrderStandard, Output},
-	};
-	use std::{any::Any, collections::HashMap};
-
-	// Mock implementations for testing
-	#[derive(Clone)]
-	struct MockChainRegistry;
-
-	impl MockChainRegistry {
-		fn create() -> Arc<solver_chains::ChainRegistry> {
-			let mut registry = solver_chains::ChainRegistry::new();
-
-			// Add a mock chain adapter for chain 137
-			let mock_adapter = MockChainAdapter {
-				chain_id: ChainId(137),
-				confirmations: 1,
-			};
-			registry.register(Arc::new(mock_adapter)).unwrap();
-
-			Arc::new(registry)
-		}
-	}
-
-	#[derive(Clone)]
-	struct MockChainAdapter {
-		chain_id: ChainId,
-		confirmations: u64,
-	}
-
-	#[async_trait]
-	impl solver_types::chains::ChainAdapter for MockChainAdapter {
-		fn chain_id(&self) -> ChainId {
-			self.chain_id
-		}
-
-		fn confirmations(&self) -> u64 {
-			self.confirmations
-		}
-
-		async fn get_block_number(&self) -> Result<u64> {
-			Ok(1000)
-		}
-
-		async fn get_block_timestamp(&self, _block_number: u64) -> Result<u64> {
-			Ok(1640995200) // Mock timestamp
-		}
-
-		async fn get_balance(&self, _address: Address) -> Result<U256> {
-			Ok(U256::from(1_000_000_000_000_000_000u64)) // 1 ETH
-		}
-
-		async fn submit_transaction(&self, _tx: Transaction) -> Result<TxHash> {
-			Ok(TxHash::zero())
-		}
-
-		async fn get_transaction_receipt(
-			&self,
-			_tx_hash: TxHash,
-		) -> Result<Option<solver_types::chains::TransactionReceipt>> {
-			Ok(Some(solver_types::chains::TransactionReceipt {
-				transaction_hash: TxHash::zero(),
-				block_number: 1001,
-				gas_used: U256::from(21000),
-				status: true,
-				timestamp: Some(1640995200),
-			}))
-		}
-
-		async fn call(&self, _tx: Transaction, _block: Option<u64>) -> Result<Vec<u8>> {
-			Ok(vec![])
-		}
-
-		async fn get_logs(
-			&self,
-			_address: Option<Address>,
-			_topics: Vec<Option<solver_types::common::Bytes32>>,
-			_from_block: u64,
-			_to_block: u64,
-		) -> Result<Vec<solver_types::chains::Log>> {
-			Ok(vec![])
-		}
-
-		async fn estimate_gas(&self, _tx: &Transaction) -> Result<U256> {
-			Ok(U256::from(100_000))
-		}
-
-		async fn get_gas_price(&self) -> Result<U256> {
-			Ok(U256::from(20_000_000_000u64)) // 20 gwei
-		}
-	}
-
-	// Mock order for testing
-	#[derive(Debug, Clone)]
-	struct MockOrder {
-		id: OrderId,
-		origin_chain: ChainId,
-		destination_chains: Vec<ChainId>,
-		expires_at: Timestamp,
-		fill_instructions: Vec<FillInstruction>,
-	}
-
-	#[async_trait]
-	impl Order for MockOrder {
-		fn id(&self) -> OrderId {
-			self.id
-		}
-
-		fn standard(&self) -> OrderStandard {
-			OrderStandard::EIP7683
-		}
-
-		fn origin_chain(&self) -> ChainId {
-			self.origin_chain
-		}
-
-		fn destination_chains(&self) -> Vec<ChainId> {
-			self.destination_chains.clone()
-		}
-
-		fn created_at(&self) -> Timestamp {
-			0
-		}
-
-		fn expires_at(&self) -> Timestamp {
-			self.expires_at
-		}
-
-		async fn validate(&self) -> Result<()> {
-			Ok(())
-		}
-
-		async fn to_fill_instructions(&self) -> Result<Vec<FillInstruction>> {
-			Ok(self.fill_instructions.clone())
-		}
-
-		fn as_any(&self) -> &dyn Any {
-			self
-		}
-
-		fn user(&self) -> Address {
-			Address::from([1u8; 20])
-		}
-
-		fn inputs(&self) -> Result<Vec<Input>> {
-			Ok(vec![Input {
-				token: Address::from([2u8; 20]),
-				amount: U256::from(1_000_000_000_000_000_000u64),
-			}])
-		}
-
-		fn outputs(&self) -> Result<Vec<Output>> {
-			Ok(vec![Output {
-				token: Address::from([3u8; 20]),
-				amount: U256::from(1_000_000_000_000_000_000u64),
-				recipient: Address::from([4u8; 20]),
-				chain_id: self
-					.destination_chains
-					.first()
-					.cloned()
-					.unwrap_or(ChainId(1)),
-			}])
-		}
-	}
-
-	async fn create_test_engine() -> (SolverEngine, Arc<solver_state::StateManager>) {
-		let chain_registry = MockChainRegistry::create();
-		let delivery_service = Arc::new(solver_delivery::DeliveryServiceImpl::Rpc(
-			solver_delivery::RpcDelivery::new(
-				solver_delivery::DeliveryConfig {
-					endpoints: std::collections::HashMap::new(),
-					api_key: "test".to_string(),
-					gas_strategy: solver_delivery::GasStrategy::Standard,
-					max_retries: 3,
-					confirmations: 1,
-					from_address: Address::zero(),
-				},
-				chain_registry.clone(),
-			),
-		));
-
-		// Create a mock state manager
-		let state_config = solver_state::StateConfig {
-			max_queue_size: 100,
-			storage_backend: solver_state::StorageBackend::Memory,
-			recover_on_startup: false,
-		};
-		let state_manager = Arc::new(solver_state::StateManager::new(state_config).await.unwrap());
-
-		// Create a mock order registry
-		let order_registry = Arc::new(solver_orders::OrderRegistry::new());
-
-		// Create a mock settlement manager
-		let settlement_config = solver_settlement::SettlementConfig {
-			strategies: std::collections::HashMap::new(),
-			default_strategy: solver_settlement::SettlementType::Direct,
-			poll_interval: std::time::Duration::from_secs(5),
-			max_attempts: 3,
-		};
-		let settlement_manager = Arc::new(
-			solver_settlement::SettlementManager::new(
-				settlement_config,
-				state_manager.clone(),
-				order_registry.clone(),
-				chain_registry.clone(),
-				delivery_service.clone(),
-			)
-			.await
-			.unwrap(),
-		);
-
-		let engine = SolverEngine::new(
-			chain_registry,
-			delivery_service,
-			settlement_manager,
-			state_manager.clone(),
-			Address::zero(),
-			0, // min_profit_bps
-		);
-
-		(engine, state_manager)
-	}
-
-	#[tokio::test]
-	async fn test_engine_lifecycle() {
-		let (engine, _) = create_test_engine().await;
-
-		// Test starting the engine
-		assert!(engine.start().await.is_ok());
-
-		// Check stats
-		let stats = engine.stats().await;
-		assert!(stats.is_running);
-		assert_eq!(stats.processed_orders, 0);
-		assert_eq!(stats.failed_orders, 0);
-
-		// Test stopping the engine
-		assert!(engine.stop().await.is_ok());
-
-		// Check stats again
-		let stats = engine.stats().await;
-		assert!(!stats.is_running);
-	}
-
-	#[tokio::test]
-	async fn test_process_order_validation_failure() {
-		let (engine, _) = create_test_engine().await;
-		engine.start().await.unwrap();
-
-		// Create an order that fails validation
-		#[derive(Debug, Clone)]
-		struct InvalidOrder;
-
-		#[async_trait]
-		impl Order for InvalidOrder {
-			fn id(&self) -> OrderId {
-				Bytes32::from([2u8; 32])
-			}
-
-			fn standard(&self) -> OrderStandard {
-				OrderStandard::EIP7683
-			}
-
-			fn origin_chain(&self) -> ChainId {
-				ChainId(1)
-			}
-
-			fn destination_chains(&self) -> Vec<ChainId> {
-				vec![ChainId(137)]
-			}
-
-			fn created_at(&self) -> Timestamp {
-				0
-			}
-
-			fn expires_at(&self) -> Timestamp {
-				chrono::Utc::now().timestamp() as u64 + 3600
-			}
-
-			async fn validate(&self) -> Result<()> {
-				Err(SolverError::Order("Invalid order".to_string()))
-			}
-
-			async fn to_fill_instructions(&self) -> Result<Vec<FillInstruction>> {
-				Ok(vec![])
-			}
-
-			fn as_any(&self) -> &dyn Any {
-				self
-			}
-
-			fn user(&self) -> Address {
-				Address::from([1u8; 20])
-			}
-
-			fn inputs(&self) -> Result<Vec<Input>> {
-				Ok(vec![Input {
-					token: Address::from([2u8; 20]),
-					amount: U256::from(1_000_000_000_000_000_000u64),
-				}])
-			}
-
-			fn outputs(&self) -> Result<Vec<Output>> {
-				Ok(vec![Output {
-					token: Address::from([3u8; 20]),
-					amount: U256::from(1_000_000_000_000_000_000u64),
-					recipient: Address::from([4u8; 20]),
-					chain_id: ChainId(137),
-				}])
-			}
-		}
-
-		let order = InvalidOrder;
-		let result = engine.process_order(order).await;
-		assert!(result.is_err());
-
-		// Check that failed orders counter was incremented
-		let stats = engine.stats().await;
-		assert_eq!(stats.processed_orders, 0);
-		assert_eq!(stats.failed_orders, 1);
-	}
-
-	#[tokio::test]
-	async fn test_profitability_check() {
-		let chain_registry = MockChainRegistry::create();
-		let delivery_service = Arc::new(solver_delivery::DeliveryServiceImpl::Rpc(
-			solver_delivery::RpcDelivery::new(
-				solver_delivery::DeliveryConfig {
-					endpoints: HashMap::new(),
-					api_key: "test".to_string(),
-					gas_strategy: solver_delivery::GasStrategy::Standard,
-					max_retries: 3,
-					confirmations: 1,
-					from_address: Address::zero(),
-				},
-				chain_registry.clone(),
-			),
-		));
-		let state_config = solver_state::StateConfig {
-			max_queue_size: 100,
-			storage_backend: solver_state::StorageBackend::Memory,
-			recover_on_startup: false,
-		};
-		let state_manager = Arc::new(solver_state::StateManager::new(state_config).await.unwrap());
-
-		// Create a mock order registry
-		let order_registry = Arc::new(solver_orders::OrderRegistry::new());
-
-		let settlement_config = solver_settlement::SettlementConfig {
-			strategies: std::collections::HashMap::new(),
-			default_strategy: solver_settlement::SettlementType::Direct,
-			poll_interval: std::time::Duration::from_secs(5),
-			max_attempts: 3,
-		};
-		let settlement_manager = Arc::new(
-			solver_settlement::SettlementManager::new(
-				settlement_config,
-				state_manager.clone(),
-				order_registry.clone(),
-				chain_registry.clone(),
-				delivery_service.clone(),
-			)
-			.await
-			.unwrap(),
-		);
-
-		// Create processor with non-zero min_profit_bps
-		let processor = OrderProcessor::new(
-			chain_registry,
-			delivery_service,
-			settlement_manager,
-			state_manager,
-			Address::zero(),
-			100, // 1% minimum profit
-		);
-
-		let order = Box::new(MockOrder {
-			id: Bytes32::from([3u8; 32]),
-			origin_chain: ChainId(1),
-			destination_chains: vec![ChainId(137)],
-			expires_at: chrono::Utc::now().timestamp() as u64 + 3600,
-			fill_instructions: vec![],
-		});
-
-		// For now, profitability check always returns true if implemented
-		// In a real implementation, this would check actual profitability
-		let profitable = processor.check_profitability(order.as_ref()).await.unwrap();
-		assert!(profitable);
-	}
-
-	#[tokio::test]
-	async fn test_build_fill_transaction() {
-		let (engine, _) = create_test_engine().await;
-
-		let order = Box::new(MockOrder {
-			id: Bytes32::from([4u8; 32]),
-			origin_chain: ChainId(1),
-			destination_chains: vec![ChainId(137)],
-			expires_at: chrono::Utc::now().timestamp() as u64 + 3600,
-			fill_instructions: vec![],
-		});
-
-		let instruction = FillInstruction {
-			destination_chain: ChainId(137),
-			destination_contract: Address::from([5u8; 20]),
-			fill_data: FillData::EIP7683 {
-				order_id: Bytes32::from([4u8; 32]),
-				origin_data: vec![0xaa, 0xbb, 0xcc],
-			},
-		};
-
-		let tx = engine
-			.processor
-			.build_fill_transaction(order.as_ref(), &instruction)
-			.unwrap();
-
-		assert_eq!(tx.to, Address::from([5u8; 20]));
-		assert_eq!(tx.value, U256::zero());
-		assert!(!tx.data.is_empty());
-
-		// Check that the transaction data starts with the function selector
-		let expected_selector =
-			ethers::utils::keccak256(b"fill(bytes32,bytes,bytes)")[..4].to_vec();
-		assert_eq!(&tx.data[..4], &expected_selector);
+impl Default for OrchestratorBuilder {
+	fn default() -> Self {
+		Self::new()
 	}
 }
