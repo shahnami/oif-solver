@@ -62,7 +62,7 @@ pub struct Eip7683Order {
 	/// Input tokens and amounts provided by the user
 	pub inputs: Vec<(String, u64, u64)>, // (token, amount, chain_id)
 	/// Oracle address for settlement verification
-	pub local_oracle: Address,           // Oracle address from the original order
+	pub local_oracle: Address, // Oracle address from the original order
 }
 
 /// Mandate output specification.
@@ -230,7 +230,7 @@ pub struct Eip7683Config {
 	/// InputSettler addresses for each chain
 	pub input_settler_addresses: Vec<Address>, // InputSettler addresses per chain
 	/// Optional oracle address for settlement verification
-	pub oracle_address: Option<Address>,       // Oracle address for settlement verification
+	pub oracle_address: Option<Address>, // Oracle address for settlement verification
 }
 
 impl Default for Eip7683Config {

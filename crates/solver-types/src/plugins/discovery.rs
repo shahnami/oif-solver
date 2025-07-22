@@ -115,7 +115,7 @@ pub struct EventMetadata {
 	/// Source-specific metadata fields (protocol-dependent)
 	pub source_specific: HashMap<String, String>,
 	/// Confidence score for event validity (0.0 to 1.0)
-	pub confidence_score: f64,         // 0.0 to 1.0
+	pub confidence_score: f64, // 0.0 to 1.0
 	/// Time delay from event occurrence to discovery in milliseconds
 	pub processing_delay: Option<u64>, // milliseconds from event to discovery
 	/// Number of discovery retry attempts for this event
@@ -293,17 +293,17 @@ pub trait RealtimeDiscovery: DiscoveryPlugin {
 #[derive(Debug, Clone, PartialEq, Hash, Eq)]
 pub enum DiscoverySourceType {
 	/// Regular blockchain RPC polling for events
-	OnchainPolling,   // Regular RPC polling
+	OnchainPolling, // Regular RPC polling
 	/// Real-time blockchain event streaming via WebSocket
 	OnchainStreaming, // WebSocket or similar
 	/// HTTP webhook endpoint for push notifications
-	Webhook,          // HTTP webhook endpoint
+	Webhook, // HTTP webhook endpoint
 	/// Message queue systems like Kafka or RabbitMQ
-	MessageQueue,     // Kafka, RabbitMQ, etc.
+	MessageQueue, // Kafka, RabbitMQ, etc.
 	/// Direct database monitoring for event records
-	Database,         // Direct database monitoring
+	Database, // Direct database monitoring
 	/// Third-party API endpoints for event data
-	API,              // Third-party API
+	API, // Third-party API
 	/// Custom discovery mechanism not covered above
 	Custom(String),
 }
@@ -315,19 +315,19 @@ pub enum DiscoverySourceType {
 pub trait DiscoveryPluginFactory: Send + Sync {
 	/// Create a new instance of the discovery plugin with configuration.
 	fn create_plugin(&self, config: PluginConfig) -> PluginResult<Box<dyn DiscoveryPlugin>>;
-	
+
 	/// Get the unique type identifier for this plugin factory.
 	fn plugin_type(&self) -> &'static str;
-	
+
 	/// Get the list of blockchain networks this plugin supports.
 	fn supported_chains(&self) -> Vec<ChainId>;
-	
+
 	/// Get the technical mechanism this plugin uses for discovery.
 	fn source_type(&self) -> DiscoverySourceType;
-	
+
 	/// Check if this plugin supports historical event discovery.
 	fn supports_historical(&self) -> bool;
-	
+
 	/// Check if this plugin supports real-time event streaming.
 	fn supports_realtime(&self) -> bool;
 }

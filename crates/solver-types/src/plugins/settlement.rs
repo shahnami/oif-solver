@@ -72,15 +72,15 @@ pub struct SettlementRequest {
 #[derive(Debug, Clone, Serialize, Deserialize, Hash, Eq, PartialEq)]
 pub enum SettlementType {
 	/// Direct settlement on origin chain
-	Direct,         // Direct settlement on origin chain
+	Direct, // Direct settlement on origin chain
 	/// Optimistic settlement with challenge period
-	Optimistic,     // Optimistic settlement with challenge period
+	Optimistic, // Optimistic settlement with challenge period
 	/// Zero-knowledge proof based settlement
-	ZkProof,        // Zero-knowledge proof settlement
+	ZkProof, // Zero-knowledge proof settlement
 	/// Oracle-based attestation settlement
-	Oracle,         // Oracle-based settlement
+	Oracle, // Oracle-based settlement
 	/// Arbitrum-specific settlement mechanism
-	Arbitrum,       // Arbitrum-specific settlement
+	Arbitrum, // Arbitrum-specific settlement
 	/// Custom settlement mechanism
 	Custom(String), // Custom settlement mechanism
 }
@@ -128,11 +128,11 @@ pub enum SettlementStatus {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub enum SettlementPriority {
 	/// Settle as soon as possible
-	Immediate,            // Settle as soon as possible
+	Immediate, // Settle as soon as possible
 	/// Wait for batch settlement to reduce costs
-	Batched,              // Wait for batch settlement
+	Batched, // Wait for batch settlement
 	/// Wait for optimal gas conditions
-	Optimized,            // Wait for optimal gas conditions
+	Optimized, // Wait for optimal gas conditions
 	/// Settle at a specific scheduled time
 	Scheduled(Timestamp), // Settle at specific time
 }
@@ -383,7 +383,7 @@ pub struct OracleRequirement {
 #[derive(Debug, Clone)]
 pub struct TimeoutLimits {
 	/// Maximum time allowed for settlement completion in seconds
-	pub max_settlement_time: u64,      // seconds
+	pub max_settlement_time: u64, // seconds
 	/// Challenge period duration for optimistic settlements in seconds
 	pub challenge_period: Option<u64>, // seconds for optimistic settlements
 }
@@ -395,13 +395,13 @@ pub struct TimeoutLimits {
 pub trait SettlementPluginFactory: Send + Sync {
 	/// Create a new instance of the settlement plugin with configuration.
 	fn create_plugin(&self, config: PluginConfig) -> PluginResult<Box<dyn SettlementPlugin>>;
-	
+
 	/// Get the unique type identifier for this plugin factory.
 	fn plugin_type(&self) -> &'static str;
-	
+
 	/// Get the list of blockchain networks this plugin supports.
 	fn supported_chains(&self) -> Vec<ChainId>;
-	
+
 	/// Get the settlement types this plugin can handle.
 	fn supported_settlement_types(&self) -> Vec<SettlementType>;
 }

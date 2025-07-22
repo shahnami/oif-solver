@@ -282,7 +282,7 @@ pub struct OrderEstimate {
 	/// Breakdown of estimated fees by type
 	pub estimated_fees: HashMap<String, u64>, // fee type -> amount
 	/// Feasibility score from 0.0 (impossible) to 1.0 (highly feasible)
-	pub feasibility_score: f64,               // 0.0 to 1.0
+	pub feasibility_score: f64, // 0.0 to 1.0
 	/// Recommendations for order optimization
 	pub recommendations: Vec<String>,
 }
@@ -306,7 +306,7 @@ pub trait OrderPluginFactory: Send + Sync {
 			>,
 		>,
 	>;
-	
+
 	/// Get the unique type identifier for this plugin factory.
 	fn plugin_type(&self) -> &'static str;
 

@@ -4,7 +4,7 @@
 //!
 //! This plugin implements transaction submission, monitoring, and management for
 //! Ethereum and EVM-compatible chains using the ethers.rs library. It supports
-//! features like EIP-1559, nonce management, gas price optimization, and 
+//! features like EIP-1559, nonce management, gas price optimization, and
 //! transaction status tracking.
 
 use async_trait::async_trait;

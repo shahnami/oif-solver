@@ -292,7 +292,7 @@ pub struct DeliveryEstimate {
 	/// Estimated time until confirmation in seconds
 	pub estimated_time: Option<u64>, // seconds until confirmation
 	/// Confidence score for the estimate (0.0 to 1.0)
-	pub confidence_score: f64,       // 0.0 to 1.0
+	pub confidence_score: f64, // 0.0 to 1.0
 	/// Optimization recommendations
 	pub recommendations: Vec<String>,
 }
@@ -443,10 +443,10 @@ pub enum DeliveryStrategy {
 pub trait DeliveryPluginFactory: Send + Sync {
 	/// Create a new instance of the delivery plugin with configuration.
 	fn create_plugin(&self, config: PluginConfig) -> PluginResult<Box<dyn DeliveryPlugin>>;
-	
+
 	/// Get the unique type identifier for this plugin factory.
 	fn plugin_type(&self) -> &'static str;
-	
+
 	/// Get the list of blockchain networks this plugin supports.
 	fn supported_chains(&self) -> Vec<ChainId>;
 }

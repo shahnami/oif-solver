@@ -58,12 +58,12 @@ pub trait StateStore: Send + Sync + Debug {
 	///
 	/// Retrieves multiple values in a single operation.
 	async fn batch_get(&self, keys: &[String]) -> PluginResult<Vec<Option<Bytes>>>;
-	
+
 	/// Batch set operation for efficiency.
 	///
 	/// Stores multiple key-value pairs in a single operation.
 	async fn batch_set(&self, items: &[(String, Bytes)]) -> PluginResult<()>;
-	
+
 	/// Batch delete operation for efficiency.
 	///
 	/// Removes multiple keys in a single operation.
@@ -103,7 +103,7 @@ pub struct StorageStats {
 	/// Memory usage in bytes (if available)
 	pub memory_usage_bytes: Option<u64>,
 	/// Cache hit rate if applicable (0.0 to 1.0)
-	pub hit_rate: Option<f64>,                  // Cache hit rate if applicable
+	pub hit_rate: Option<f64>, // Cache hit rate if applicable
 	/// Operation counts by type (get, set, delete)
 	pub operations_count: HashMap<String, u64>, // get, set, delete counts
 }
@@ -428,10 +428,10 @@ where
 pub trait StatePluginFactory: Send + Sync {
 	/// Create a new instance of the state plugin with configuration.
 	fn create_plugin(&self, config: PluginConfig) -> PluginResult<Box<dyn StatePlugin>>;
-	
+
 	/// Get the unique type identifier for this plugin factory.
 	fn plugin_type(&self) -> &'static str;
-	
+
 	/// Get the list of features this state backend supports.
 	fn supports_features(&self) -> Vec<StateFeature>;
 }
