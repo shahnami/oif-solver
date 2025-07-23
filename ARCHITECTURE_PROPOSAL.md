@@ -20,7 +20,6 @@ oif-solver/
 │   └── solver-service/       # HTTP API and CLI interface
 ├── config/                   # Configuration files
 ├── scripts/                  # Demo and utility scripts
-└── oif-contracts/           # Smart contract implementations
 ```
 
 ## Directory Responsibilities
@@ -33,7 +32,7 @@ oif-solver/
 - **solver-plugin**: Contains concrete plugin implementations for different protocols and chains
 - **solver-types**: Defines shared data structures, traits, and interfaces used across all components
 - **solver-config**: Manages configuration parsing, validation, and runtime settings
-- **solver-service**: Exposes HTTP API endpoints and CLI interface for external interaction
+- **solver-service**: Main stand-alone binary that exposes HTTP API endpoints and CLI interface for external interaction
 
 ## High-Level System Flow
 
@@ -52,15 +51,14 @@ sequenceDiagram
     Discovery->>Core: Intent Discovered
 
     Note over Core,Settlement: Intent Processing
-    Core->>State: Get Intent Details
     Core->>Delivery: Process Intent
     Delivery->>State: Store Transaction
     Delivery->>Core: Transaction Submitted
 
     Note over Core,Settlement: Settlement Processing
     Core->>Settlement: Handle Fill Event
-    Settlement->>State: Get Transaction Data
     Settlement->>Delivery: Submit Settlement
+    Settlement->>State: Store Transaction
     Settlement->>Core: Settlement Complete
 ```
 
