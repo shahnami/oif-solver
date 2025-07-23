@@ -168,7 +168,7 @@ impl EvmAlloyDeliveryPlugin {
 		// Build provider with all necessary layers
 		let provider = ProviderBuilder::new()
 			.with_gas_estimation()
-			.with_simple_nonce_management()
+			.with_cached_nonce_management()
 			.with_chain_id(self.config.chain_id)
 			.wallet(wallet)
 			.connect_http(self.config.rpc_url.parse().map_err(|e| {
