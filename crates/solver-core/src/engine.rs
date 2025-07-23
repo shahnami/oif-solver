@@ -367,19 +367,29 @@ impl Orchestrator {
 		let mut event_rx = self.event_rx.lock().await;
 		let mut shutdown_rx = self.lifecycle_manager.subscribe_shutdown();
 
+		let mut join_set = JoinSet::new();
+
 		loop {
 			tokio::select! {
 				Some(event) = event_rx.recv() => {
-					debug!("Processing event: {:?}", event);
-
-					if let Err(e) = self.handle_event(event).await {
-						warn!("Error handling event: {}", e);
-					}
+					let orchestrator = self.clone();
+					join_set.spawn(async move {
+						if let Err(e) = orchestrator.handle_event(event).await {
+							warn!("Error handling event: {}", e);
+						}
+					});
 				}
 				_ = shutdown_rx.recv() => {
 					info!("Event processor received shutdown signal");
 					break;
 				}
+			}
+		}
+
+		// Await all in-flight event handler tasks before returning
+		while let Some(res) = join_set.join_next().await {
+			if let Err(e) = res {
+				warn!("Event handler task failed: {}", e);
 			}
 		}
 

@@ -335,7 +335,7 @@ verify_transaction() {
         echo -e "${GREEN}✅ Cross-chain intent created successfully!${NC}"
         echo ""
         echo -e "${BLUE}📊 Origin Chain (31337) - Intent Created:${NC}"
-        echo -e "   User deposited: $(echo "scale=2; -$USER_BALANCE_CHANGE / 1000000000000000000" | bc -l) TEST → InputSettler"
+        echo -e "   User deposited: $(echo "scale=2; -1 * $USER_BALANCE_CHANGE / 1000000000000000000" | bc -l) TEST → InputSettler"
         echo -e "   InputSettler holding: $(echo "scale=2; $SETTLER_BALANCE_CHANGE / 1000000000000000000" | bc -l) TEST"
         echo ""
         echo -e "${YELLOW}⏳ Waiting for solver to fill on destination chain...${NC}"
