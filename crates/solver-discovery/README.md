@@ -2,7 +2,7 @@
 
 The `solver-discovery` crate provides a plugin-based order discovery service that monitors multiple blockchain sources for order events. It orchestrates various discovery plugins and provides real-time monitoring capabilities.
 
-## 🏗️ Architecture Overview
+## Architecture Overview
 
 ```text
 ┌─────────────────────────────────────────────────────────────────────────┐
@@ -38,7 +38,7 @@ The `solver-discovery` crate provides a plugin-based order discovery service tha
             └──────────────────┘       └───────────────────┘
 ```
 
-## 📁 Module Structure
+## Module Structure
 
 ```
 solver-discovery/
@@ -49,7 +49,7 @@ solver-discovery/
 └── README.md           # This file
 ```
 
-## 🔑 Key Components
+## Key Components
 
 ### 1. **DiscoveryService** (`lib.rs`)
 
@@ -107,7 +107,7 @@ pub enum SourceStatus {
 }
 ```
 
-## 🔄 Event Discovery Flow
+## Event Discovery Flow
 
 ```text
 Blockchain/Source → Discovery Plugin → Event Creation → Main Event Sink
@@ -123,7 +123,7 @@ Blockchain/Source → Discovery Plugin → Event Creation → Main Event Sink
 3. **Event Forwarding**: Event sent directly to main event sink
 4. **Processing**: Orchestrator handles event processing
 
-## 🔌 Plugin System
+## Plugin System
 
 ### DiscoveryPlugin Interface:
 
@@ -154,7 +154,7 @@ pub struct DiscoveryConfig {
 }
 ```
 
-## 🚀 Usage Example
+## Usage Example
 
 ```rust
 use solver_discovery::{DiscoveryService, DiscoveryServiceBuilder};
@@ -201,7 +201,7 @@ for (name, source) in status {
 }
 ```
 
-## 🔍 Critical Observations
+## Critical Observations
 
 ### Strengths:
 
@@ -225,7 +225,7 @@ for (name, source) in status {
 4. **Event Filtering**: Add configurable event filters at source level
 5. **Metrics Export**: Add Prometheus metrics export
 
-## 🔗 Dependencies
+## Dependencies
 
 ### Internal Crates:
 
@@ -242,7 +242,7 @@ for (name, source) in status {
 - `thiserror`/`anyhow`: Error handling
 - `serde`/`serde_json`: Serialization support
 
-## 🏃 Runtime Behavior
+## Runtime Behavior
 
 ### Service Lifecycle:
 
@@ -258,7 +258,7 @@ for (name, source) in status {
 - Status updates use RwLock for concurrent access
 - Direct event forwarding without buffering
 
-## 🐛 Known Issues & Limitations
+## Known Issues & Limitations
 
 1. **No Rate Limiting**: Configuration exists but not implemented
 2. **No Statistics**: No metrics or performance tracking
@@ -266,7 +266,7 @@ for (name, source) in status {
 4. **Plugin Double-Lock**: Unnecessary complexity in plugin storage type
 5. **No Graceful Shutdown**: Plugins stopped immediately without draining
 
-## 🔮 Future Improvements
+## Future Improvements
 
 1. **Rate Limiting**: Implement per-source rate limiting
 2. **Event Filtering**: Add source-level event filtering
@@ -277,13 +277,13 @@ for (name, source) in status {
 7. **Circuit Breaker**: Add circuit breaker for failing sources
 8. **Plugin Hot Reload**: Support adding/removing plugins at runtime
 
-## 📊 Performance Considerations
+## Performance Considerations
 
 - **Lock Contention**: Multiple RwLocks could cause contention under load
 - **Direct Forwarding**: No buffering means backpressure affects plugins
 - **No Batching**: Events processed individually, not batched
 
-## ⚠️ Security Considerations
+## Security Considerations
 
 - **Plugin Trust**: Plugins have full event sink access
 - **No Authentication**: No built-in auth for webhook sources

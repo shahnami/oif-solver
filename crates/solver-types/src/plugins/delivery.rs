@@ -240,7 +240,7 @@ pub struct TransactionReceipt {
 	/// Actual gas consumed by the transaction
 	pub gas_used: u64,
 	/// Effective gas price paid for the transaction
-	pub effective_gas_price: u64,
+	pub effective_gas_price: u128,
 	/// Transaction execution status (true for success, false for failure)
 	pub status: bool, // true for success, false for failure
 	/// Event logs emitted by the transaction
@@ -270,11 +270,11 @@ pub struct DeliveryCost {
 	/// Gas units consumed by the transaction
 	pub gas_used: u64,
 	/// Gas price used for the transaction
-	pub gas_price: u64,
+	pub gas_price: u128,
 	/// Total cost in wei (gas_used * gas_price)
-	pub total_cost: u64,
+	pub total_cost: u128,
 	/// Breakdown of fees by component
-	pub fee_breakdown: HashMap<String, u64>,
+	pub fee_breakdown: HashMap<String, u128>,
 }
 
 /// Delivery estimation result.

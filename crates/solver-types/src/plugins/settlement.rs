@@ -176,6 +176,12 @@ pub enum RiskSeverity {
 /// and cross-chain settlement verification.
 #[async_trait]
 pub trait SettlementPlugin: BasePlugin {
+	/// Sets up the provider connection for blockchain interactions.
+	///
+	/// Initializes the RPC provider that will be used for reading
+	/// blockchain state and interacting with oracle contracts.
+	async fn setup_provider(&mut self) -> PluginResult<()>;
+
 	/// Check if this plugin can handle settlement for the given chain and order type.
 	///
 	/// Validates whether the plugin supports the specific chain and order

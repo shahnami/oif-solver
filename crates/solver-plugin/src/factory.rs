@@ -11,7 +11,7 @@ use solver_types::plugins::*;
 use std::collections::HashMap;
 use std::sync::Arc;
 
-use crate::delivery::{EvmEthersConfig, EvmEthersDeliveryPlugin};
+use crate::delivery::{EvmAlloyConfig, EvmAlloyDeliveryPlugin};
 use crate::discovery::{Eip7683OnchainConfig, Eip7683OnchainDiscoveryPlugin};
 use crate::order::{create_eip7683_processor, Eip7683Config, Eip7683OrderPlugin};
 use crate::settlement::{DirectSettlementConfig, DirectSettlementPlugin};
@@ -253,7 +253,7 @@ pub fn create_builtin_plugin_factory() -> PluginFactory {
 	#[derive(Default)]
 	struct FileStatePluginFactory;
 	#[derive(Default)]
-	struct EvmEthersDeliveryPluginFactory;
+	struct EvmAlloyDeliveryPluginFactory;
 	#[derive(Default)]
 	struct Eip7683OnchainDiscoveryPluginFactory;
 	#[derive(Default)]
@@ -266,7 +266,7 @@ pub fn create_builtin_plugin_factory() -> PluginFactory {
 	factory.register_state_factory(FileStatePluginFactory);
 
 	// Register delivery plugins
-	factory.register_delivery_factory(EvmEthersDeliveryPluginFactory);
+	factory.register_delivery_factory(EvmAlloyDeliveryPluginFactory);
 
 	// Register discovery plugins
 	factory.register_discovery_factory(Eip7683OnchainDiscoveryPluginFactory);
@@ -321,7 +321,7 @@ pub fn create_builtin_plugin_factory() -> PluginFactory {
 		}
 	}
 
-	impl DeliveryPluginFactory for EvmEthersDeliveryPluginFactory {
+	impl DeliveryPluginFactory for EvmAlloyDeliveryPluginFactory {
 		fn create_plugin(&self, config: PluginConfig) -> PluginResult<Box<dyn DeliveryPlugin>> {
 			let chain_id = config.get_number("chain_id").ok_or_else(|| {
 				PluginError::InvalidConfiguration(
@@ -348,7 +348,7 @@ pub fn create_builtin_plugin_factory() -> PluginFactory {
 				.get_number("max_pending_transactions")
 				.unwrap_or(1000) as usize;
 
-			let evm_config = EvmEthersConfig {
+			let evm_config = EvmAlloyConfig {
 				chain_id,
 				rpc_url,
 				private_key,
@@ -361,14 +361,14 @@ pub fn create_builtin_plugin_factory() -> PluginFactory {
 				nonce_management,
 				max_pending_transactions,
 			};
-			let plugin = EvmEthersDeliveryPlugin::with_config(evm_config);
+			let plugin = EvmAlloyDeliveryPlugin::with_config(evm_config);
 			Ok(Box::new(plugin))
 		}
 		fn plugin_type(&self) -> &'static str {
-			"evm_ethers"
+			"evm_alloy"
 		}
 		fn supported_chains(&self) -> Vec<ChainId> {
-			vec![1, 10, 56, 137, 250, 8453, 31337, 31338, 42161, 43114]
+			vec![31337, 31338]
 		}
 	}
 
@@ -437,6 +437,9 @@ pub fn create_builtin_plugin_factory() -> PluginFactory {
 				oracle_address: config
 					.get_string("oracle_address")
 					.unwrap_or_else(|| "0x0000000000000000000000000000000000000000".to_string()),
+				rpc_url: config
+					.get_string("rpc_url")
+					.unwrap_or_else(|| "http://localhost:8545".to_string()),
 				min_confirmations: config.get_number("min_confirmations").unwrap_or(1) as u32,
 				dispute_period_seconds: config.get_number("dispute_period_seconds").unwrap_or(300)
 					as u64,
@@ -450,7 +453,7 @@ pub fn create_builtin_plugin_factory() -> PluginFactory {
 			"direct_settlement"
 		}
 		fn supported_chains(&self) -> Vec<ChainId> {
-			vec![1, 10, 56, 137, 250, 8453, 31337, 31338, 42161, 43114]
+			vec![31337, 31338]
 		}
 		fn supported_settlement_types(&self) -> Vec<SettlementType> {
 			vec![SettlementType::Direct]
@@ -478,8 +481,8 @@ pub fn create_builtin_plugin_factory() -> PluginFactory {
 				eip_config.solver_address = solver_addr;
 			}
 
-			if let Some(output_settler_addr) = config.get_string("output_settler_address") {
-				eip_config.output_settler_address = output_settler_addr;
+			if let Some(output_settler_addr) = config.get_array("output_settler_addresses") {
+				eip_config.output_settler_addresses = output_settler_addr;
 			}
 
 			// Parse input settler addresses

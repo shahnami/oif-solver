@@ -23,6 +23,8 @@ use solver_types::{Event, PluginConfig};
 use std::collections::HashMap;
 use std::sync::Arc;
 
+type DiscoveryPluginType = Arc<RwLock<HashMap<String, Arc<Mutex<Box<dyn DiscoveryPlugin>>>>>>;
+
 /// Discovery service that orchestrates multiple discovery plugins.
 ///
 /// The discovery service manages a collection of discovery plugins that monitor
@@ -32,7 +34,7 @@ use std::sync::Arc;
 #[derive(Debug)]
 pub struct DiscoveryService {
 	/// Registry of registered discovery plugins
-	plugins: Arc<RwLock<HashMap<String, Arc<Mutex<Box<dyn DiscoveryPlugin>>>>>>,
+	plugins: DiscoveryPluginType,
 	/// Currently active discovery sources with their status
 	active_sources: Arc<RwLock<HashMap<String, DiscoverySource>>>,
 	/// Event sink for forwarding discovered events

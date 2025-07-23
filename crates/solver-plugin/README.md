@@ -2,7 +2,7 @@
 
 The `solver-plugin` crate provides concrete implementations of all plugin interfaces defined in `solver-types`. It includes a centralized factory system for plugin creation and management, along with built-in implementations for state storage, order discovery, transaction delivery, and settlement strategies.
 
-## 🏗️ Architecture Overview
+## Architecture Overview
 
 ```text
 ┌─────────────────────────────────────────────────────────────────────────┐
@@ -25,7 +25,7 @@ The `solver-plugin` crate provides concrete implementations of all plugin interf
 ┌───────▼────────┐       ┌──────────▼────────┐       ┌─────────▼────────┐
 │ State Plugins  │       │ Discovery Plugins │       │ Delivery Plugins │
 ├────────────────┤       ├───────────────────┤       ├──────────────────┤
-│ • Memory       │       │ • EIP-7683        │       │ • EVM/Ethers     │
+│ • Memory       │       │ • EIP-7683        │       │ • EVM/Alloy      │
 │ • File         │       │   Onchain         │       │                  │
 └────────────────┘       └───────────────────┘       └──────────────────┘
                                     │
@@ -39,7 +39,7 @@ The `solver-plugin` crate provides concrete implementations of all plugin interf
      └───────────────────┘                  └───────────────────┘
 ```
 
-## 📁 Module Structure
+## Module Structure
 
 ```
 solver-plugin/
@@ -58,7 +58,7 @@ solver-plugin/
 │   ├── delivery/           # Transaction delivery plugins
 │   │   ├── mod.rs
 │   │   └── evm/            # EVM-based delivery
-│   │       └── ethers.rs   # Ethers.rs implementation
+│   │       └── alloy.rs    # alloy.rs implementation
 │   ├── settlement/         # Settlement strategy plugins
 │   │   ├── mod.rs
 │   │   ├── direct.rs       # Direct settlement
@@ -71,7 +71,7 @@ solver-plugin/
 └── README.md
 ```
 
-## 🔑 Key Components
+## Key Components
 
 ### 1. **Plugin Factory** (`factory.rs`)
 
@@ -123,7 +123,7 @@ pub struct PluginFactory {
 
 ### 4. **Delivery Plugins** (`delivery/`)
 
-#### EVM Ethers Delivery
+#### EVM Alloy Delivery
 
 - Full EVM transaction management
 - EIP-1559 support
@@ -156,7 +156,7 @@ pub struct PluginFactory {
 - Handles settlement transaction creation
 - Validates order data
 
-## 🔌 Plugin Interfaces
+## Plugin Interfaces
 
 Each plugin implements the base plugin trait plus its specific interface:
 
@@ -178,7 +178,7 @@ pub trait SettlementPlugin: BasePlugin { ... }
 pub trait OrderPlugin: BasePlugin { ... }
 ```
 
-## 🚀 Usage Example
+## Usage Example
 
 ```rust
 use solver_plugin::factory::{global_plugin_factory, PluginFactory};
@@ -204,7 +204,7 @@ let mut config = PluginConfig::default();
 config.set("chain_id", 1);
 config.set("rpc_url", "https://eth-mainnet.g.alchemy.com/v2/KEY");
 config.set("private_key", "0x...");
-let delivery_plugin = factory.create_delivery_plugin("evm_ethers", config)?;
+let delivery_plugin = factory.create_delivery_plugin("evm_alloy", config)?;
 
 // List available plugins
 let available = factory.list_available_plugins();
@@ -216,7 +216,7 @@ let features = factory.get_state_plugin_features("file").unwrap();
 println!("File plugin features: {:?}", features);
 ```
 
-## 🔍 Critical Observations
+## Critical Observations
 
 ### Strengths:
 
@@ -242,7 +242,7 @@ println!("File plugin features: {:?}", features);
 4. **Plugin Dependencies**: Support inter-plugin dependencies
 5. **Hot Reload**: Support updating plugins at runtime
 
-## 🔗 Dependencies
+## Dependencies
 
 ### Internal Crates:
 
@@ -252,7 +252,6 @@ println!("File plugin features: {:?}", features);
 
 - `tokio`: Async runtime
 - `async-trait`: Async trait support
-- `ethers`: Ethereum interaction
 - `alloy`: Ethereum types
 - `serde`/`serde_json`: Serialization
 - `tracing`: Logging
@@ -267,7 +266,7 @@ println!("File plugin features: {:?}", features);
 - `libc`: System calls
 - `md5`: Hash generation for file names
 
-## 🏃 Runtime Behavior
+## Runtime Behavior
 
 ### Plugin Lifecycle:
 
@@ -286,7 +285,7 @@ println!("File plugin features: {:?}", features);
 - Order processors use Arc for multi-service use
 - Discovery/Delivery/Settlement use Box for single ownership
 
-## 🐛 Known Issues & Cruft
+## Known Issues & Cruft
 
 1. **Unused Offchain Module**: `discovery/offchain/mod.rs` exists but empty
 2. **Duplicate Factory Structs**: Settlement plugins define unused factory structs
@@ -295,7 +294,7 @@ println!("File plugin features: {:?}", features);
 5. **Error Propagation**: Many `unwrap()` calls in plugin implementations
 6. **Config Duplication**: Similar config fields across plugins
 
-## 🔮 Future Improvements
+## Future Improvements
 
 1. **Dynamic Plugin Loading**: Load plugins from external files
 2. **Plugin Marketplace**: Registry of community plugins
@@ -305,14 +304,14 @@ println!("File plugin features: {:?}", features);
 6. **WASM Support**: Run plugins in WASM sandbox
 7. **Plugin Templates**: Generator for new plugin types
 
-## 📊 Performance Considerations
+## Performance Considerations
 
 - **Factory Lookups**: HashMap lookups for each plugin creation
 - **Box Allocations**: Every plugin creation allocates
 - **Config Parsing**: Runtime config validation overhead
 - **No Plugin Pooling**: Plugins created fresh each time
 
-## ⚠️ Security Considerations
+## Security Considerations
 
 - **Private Key Handling**: Delivery plugins handle private keys
 - **RPC Trust**: Plugins trust RPC endpoints

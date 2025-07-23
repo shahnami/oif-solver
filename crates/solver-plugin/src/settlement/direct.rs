@@ -6,10 +6,13 @@
 //! oracle attestation confirms successful order fills. It manages dispute
 //! periods, claim windows, and verification of settlement conditions.
 
+use alloy::network::Ethereum;
+use alloy::providers::{Provider, ProviderBuilder};
 use async_trait::async_trait;
 use serde::{Deserialize, Serialize};
 use solver_types::*;
 use std::any::Any;
+use std::fmt;
 use tracing::debug;
 
 /// Direct settlement plugin - settles immediately on origin chain.
@@ -17,12 +20,23 @@ use tracing::debug;
 /// Handles direct settlement workflow where orders are settled on the
 /// origin chain immediately after oracle attestation confirms the fill
 /// on the destination chain.
-#[derive(Debug, Default)]
 pub struct DirectSettlementPlugin {
 	/// Plugin configuration settings
 	config: DirectSettlementConfig,
 	/// Whether the plugin has been initialized
 	is_initialized: bool,
+	/// Read-only provider for oracle interactions
+	provider: Option<Box<dyn Provider<Ethereum>>>,
+}
+
+impl fmt::Debug for DirectSettlementPlugin {
+	fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+		f.debug_struct("DirectSettlementPlugin")
+			.field("config", &self.config)
+			.field("is_initialized", &self.is_initialized)
+			.field("provider", &"<Provider>")
+			.finish()
+	}
 }
 
 /// Configuration for the direct settlement plugin.
@@ -33,6 +47,8 @@ pub struct DirectSettlementPlugin {
 pub struct DirectSettlementConfig {
 	/// Address of the oracle contract for fill verification
 	pub oracle_address: Address,
+	/// RPC URL for provider connection
+	pub rpc_url: String,
 	/// Minimum block confirmations required before settlement
 	pub min_confirmations: u32,
 	/// Duration of the dispute period in seconds
@@ -45,6 +61,7 @@ impl Default for DirectSettlementConfig {
 	fn default() -> Self {
 		Self {
 			oracle_address: "0x0000000000000000000000000000000000000000".to_string(),
+			rpc_url: "http://localhost:8545".to_string(),
 			min_confirmations: 1,
 			dispute_period_seconds: 300, // 5 minutes
 			claim_window_seconds: 86400, // 24 hours
@@ -52,13 +69,21 @@ impl Default for DirectSettlementConfig {
 	}
 }
 
-impl DirectSettlementPlugin {
-	/// Creates a new direct settlement plugin with default configuration.
-	pub fn new() -> Self {
+#[allow(clippy::derivable_impls)]
+impl Default for DirectSettlementPlugin {
+	fn default() -> Self {
 		Self {
 			config: DirectSettlementConfig::default(),
 			is_initialized: false,
+			provider: None,
 		}
+	}
+}
+
+impl DirectSettlementPlugin {
+	/// Creates a new direct settlement plugin with default configuration.
+	pub fn new() -> Self {
+		Self::default()
 	}
 
 	/// Creates a new direct settlement plugin with the specified configuration.
@@ -66,6 +91,7 @@ impl DirectSettlementPlugin {
 		Self {
 			config,
 			is_initialized: false,
+			provider: None,
 		}
 	}
 }
@@ -98,6 +124,10 @@ impl BasePlugin for DirectSettlementPlugin {
 		// Parse configuration
 		if let Some(ConfigValue::String(oracle)) = config.config.get("oracle_address") {
 			self.config.oracle_address = oracle.clone();
+		}
+
+		if let Some(ConfigValue::String(rpc_url)) = config.config.get("rpc_url") {
+			self.config.rpc_url = rpc_url.clone();
 		}
 
 		if let Some(ConfigValue::Number(confirmations)) = config.config.get("min_confirmations") {
@@ -169,7 +199,9 @@ impl BasePlugin for DirectSettlementPlugin {
 
 	/// Shuts down the plugin gracefully.
 	async fn shutdown(&mut self) -> PluginResult<()> {
+		debug!("Shutting down Direct settlement plugin");
 		self.is_initialized = false;
+		self.provider = None;
 		Ok(())
 	}
 
@@ -180,6 +212,11 @@ impl BasePlugin for DirectSettlementPlugin {
 				"oracle_address",
 				ConfigFieldType::String,
 				"Oracle contract address for settlement verification",
+			)
+			.required(
+				"rpc_url",
+				ConfigFieldType::String,
+				"RPC URL for blockchain provider connection",
 			)
 			.optional(
 				"min_confirmations",
@@ -214,6 +251,22 @@ impl BasePlugin for DirectSettlementPlugin {
 
 #[async_trait]
 impl SettlementPlugin for DirectSettlementPlugin {
+	/// Sets up the provider connection.
+	async fn setup_provider(&mut self) -> PluginResult<()> {
+		debug!("Setting up provider with RPC URL: {}", self.config.rpc_url);
+
+		// Create provider with the RPC URL
+		let provider = ProviderBuilder::new()
+			.connect(&self.config.rpc_url)
+			.await
+			.map_err(|e| {
+				PluginError::InitializationFailed(format!("Failed to connect to provider: {}", e))
+			})?;
+
+		self.provider = Some(Box::new(provider));
+		Ok(())
+	}
+
 	/// Checks if this plugin can handle settlement for the given chain and order type.
 	///
 	/// Direct settlement can handle any chain as it relies on oracle attestations

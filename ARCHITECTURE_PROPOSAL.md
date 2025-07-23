@@ -232,59 +232,133 @@ sequenceDiagram
 
 ## Toolkit Usage Examples
 
-### Standalone Discovery Library
+### Discovery Library
 
 ```rust
-use solver_discovery::DiscoveryService;
-use solver_plugin::discovery::Eip7683Plugin;
+// Custom discovery plugin implementation
+struct MyCustomDiscoveryPlugin { /* state */ }
 
-// Monitor blockchain for new intents
-let plugins = vec![Box::new(Eip7683Plugin::new(config))];
-let discovery = DiscoveryService::new(plugins);
+impl BasePlugin for MyCustomDiscoveryPlugin {
+    // Implement plugin_type, name, version, initialize, etc.
+}
 
-discovery.start().await?;
-// Service emits events when intents are discovered
+impl DiscoveryPlugin for MyCustomDiscoveryPlugin {
+    // Implement start_monitoring, stop_monitoring, chain_id, etc.
+    // In start_monitoring: sink.send(Event::OrderDiscovered(order_event))
+}
+
+// Usage
+let (tx, rx) = tokio::sync::mpsc::unbounded_channel();
+let discovery = DiscoveryServiceBuilder::new()
+    .with_config(DiscoveryConfig { /* config */ })
+    .with_plugin("my_discovery", Box::new(MyCustomDiscoveryPlugin {}), config)
+    .build(EventSink::new(tx))
+    .await;
+
+discovery.start_source("my_discovery").await?;
 ```
 
-### Transaction Delivery Library
+### Delivery Library
 
 ```rust
-use solver_delivery::DeliveryService;
-use solver_plugin::delivery::EthersPlugin;
+// Custom delivery plugin implementation
+struct MyChainDeliveryPlugin { /* state */ }
 
-// Submit transactions to any EVM chain
-let plugins = vec![Box::new(EthersPlugin::new(chain_config))];
-let delivery = DeliveryService::new(plugins);
+impl BasePlugin for MyChainDeliveryPlugin {
+    // Implement plugin_type, name, version, initialize, etc.
+}
 
-let result = delivery.submit_transaction(tx_data).await?;
-println!("Transaction hash: {}", result.tx_hash);
+impl DeliveryPlugin for MyChainDeliveryPlugin {
+    // Implement chain_id, can_deliver, deliver, get_transaction_status, etc.
+    // In deliver: sign tx, submit to chain, return DeliveryResponse
+}
+
+// Custom order processor
+struct MyProtocolProcessor;
+
+impl OrderProcessor for MyProtocolProcessor {
+    fn can_handle_source(&self, source: &str) -> bool {
+        source == "my_protocol"  // Protocol identifier
+    }
+
+    // Implement process_order_event, process_fill_event
+}
+
+// Usage
+let delivery = DeliveryServiceBuilder::new()
+    .with_config(DeliveryConfig { /* strategy, fallback, etc. */ })
+    .with_plugin("my_chain", Box::new(MyChainDeliveryPlugin {}), config)
+    .with_order_processor("my_processor", Arc::new(MyProtocolProcessor))
+    .build()
+    .await;
 ```
 
-### State Management Service
+### State Library
 
 ```rust
-use solver_state::StateService;
-use solver_plugin::state::FilePlugin;
+// Custom state plugin implementation
+struct MyDatabasePlugin { /* state */ }
 
-// Persistent storage with TTL
-let plugins = vec![Box::new(FilePlugin::new("./data"))];
-let state = StateService::new(plugins);
+impl BasePlugin for MyDatabasePlugin {
+    // Implement plugin_type, name, version, initialize, etc.
+}
 
-state.store("key", "value", Duration::from_secs(3600)).await?;
-let value = state.get("key").await?;
+impl StatePlugin for MyDatabasePlugin {
+    // Implement backend_type, create_store, supports_ttl, etc.
+    // create_store returns Box<dyn StateStore>
+}
+
+// Custom StateStore implementation
+struct MyDatabaseStore { /* state */ }
+
+impl StateStore for MyDatabaseStore {
+    // Implement get, set, set_with_ttl, delete, etc.
+}
+
+// Usage
+let state = StateServiceBuilder::new()
+    .with_config(StateConfig {
+        default_backend: "my_database".to_string(),
+        enable_metrics: true,
+        cleanup_interval_seconds: 300,
+        max_concurrent_operations: 100,
+    })
+    .with_plugin("my_database", Box::new(MyDatabasePlugin {}), config)
+    .build()
+    .await;
 ```
 
-### Custom Settlement Integration
+### Settlement Library
 
 ```rust
-use solver_settlement::SettlementService;
-use solver_plugin::settlement::DirectPlugin;
+// Custom settlement plugin implementation
+struct MyOracleSettlementPlugin { /* state */ }
 
-// Process settlement claims
-let plugins = vec![Box::new(DirectPlugin::new(oracle_config))];
-let settlement = SettlementService::new(plugins);
+impl BasePlugin for MyOracleSettlementPlugin {
+    // Implement plugin_type, name, version, initialize, etc.
+}
 
-settlement.process_fill_event(fill_data).await?;
+impl SettlementPlugin for MyOracleSettlementPlugin {
+    // Implement can_handle, check_oracle_attestation, get_claim_window,
+    // verify_settlement_conditions, handle_dispute, etc.
+}
+
+// Usage
+let (tx, rx) = tokio::sync::mpsc::unbounded_channel();
+let settlement = SettlementServiceBuilder::new()
+    .with_config(SettlementConfig {
+        default_strategy: "my_oracle".to_string(),
+        fallback_strategies: vec![],
+        profit_threshold_wei: "1000000000000000".to_string(),
+        monitor_interval_seconds: 10,
+    })
+    .with_event_sink(EventSink::new(tx))
+    .with_plugin("my_oracle", Box::new(MyOracleSettlementPlugin {}), config)
+    .build()
+    .await;
+
+settlement.start_monitoring().await;
+settlement.monitor_fill(fill_event).await?;
 ```
 
 ## Conclusion

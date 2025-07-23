@@ -520,123 +520,119 @@ impl FileStore {
 		let _ = fs::remove_file(&file_path).await;
 		Ok(())
 	}
+}
 
-	/// Recursively collect all keys from the storage directory
-	fn collect_keys<'a>(
-		&'a self,
-		dir: &'a Path,
-		prefix: Option<&'a str>,
-		keys: &'a mut Vec<String>,
-	) -> Pin<Box<dyn Future<Output = PluginResult<()>> + Send + 'a>> {
-		Box::pin(async move {
-			let mut entries = fs::read_dir(dir)
-				.await
-				.map_err(|e| PluginError::StateError(format!("Failed to read directory: {}", e)))?;
+/// Recursively collect all keys from the storage directory
+fn collect_keys_recursive<'a>(
+	dir: &'a Path,
+	prefix: Option<&'a str>,
+	keys: &'a mut Vec<String>,
+) -> Pin<Box<dyn Future<Output = PluginResult<()>> + Send + 'a>> {
+	Box::pin(async move {
+		let mut entries = fs::read_dir(dir)
+			.await
+			.map_err(|e| PluginError::StateError(format!("Failed to read directory: {}", e)))?;
 
-			while let Some(entry) = entries.next_entry().await.map_err(|e| {
-				PluginError::StateError(format!("Failed to read directory entry: {}", e))
-			})? {
-				let path = entry.path();
+		while let Some(entry) = entries.next_entry().await.map_err(|e| {
+			PluginError::StateError(format!("Failed to read directory entry: {}", e))
+		})? {
+			let path = entry.path();
 
-				if path.is_dir() {
-					// Recursively scan subdirectories
-					self.collect_keys(&path, prefix, keys).await?;
-				} else if let Some(filename) = path.file_name().and_then(|n| n.to_str()) {
-					if filename.ends_with(".json") {
-						// Read the file to get the original key
-						if let Ok(data) = fs::read(&path).await {
-							if let Ok(file_entry) = serde_json::from_slice::<FileEntry>(&data) {
-								if !file_entry.is_expired() {
-									let key = &file_entry.key;
-									if let Some(p) = prefix {
-										if key.starts_with(p) {
-											keys.push(key.clone());
-										}
-									} else {
+			if path.is_dir() {
+				// Recursively scan subdirectories
+				collect_keys_recursive(&path, prefix, keys).await?;
+			} else if let Some(filename) = path.file_name().and_then(|n| n.to_str()) {
+				if filename.ends_with(".json") {
+					// Read the file to get the original key
+					if let Ok(data) = fs::read(&path).await {
+						if let Ok(file_entry) = serde_json::from_slice::<FileEntry>(&data) {
+							if !file_entry.is_expired() {
+								let key = &file_entry.key;
+								if let Some(p) = prefix {
+									if key.starts_with(p) {
 										keys.push(key.clone());
 									}
+								} else {
+									keys.push(key.clone());
 								}
 							}
 						}
 					}
 				}
 			}
+		}
 
-			Ok(())
-		})
-	}
+		Ok(())
+	})
+}
 
-	/// Calculate storage statistics by scanning all files
-	fn calculate_stats<'a>(
-		&'a self,
-		dir: &'a Path,
-		total_keys: &'a mut u64,
-		total_size: &'a mut u64,
-	) -> Pin<Box<dyn Future<Output = PluginResult<()>> + Send + 'a>> {
-		Box::pin(async move {
-			let mut entries = fs::read_dir(dir)
-				.await
-				.map_err(|e| PluginError::StateError(format!("Failed to read directory: {}", e)))?;
+/// Calculate storage statistics by scanning all files
+fn calculate_stats_recursive<'a>(
+	dir: &'a Path,
+	total_keys: &'a mut u64,
+	total_size: &'a mut u64,
+) -> Pin<Box<dyn Future<Output = PluginResult<()>> + Send + 'a>> {
+	Box::pin(async move {
+		let mut entries = fs::read_dir(dir)
+			.await
+			.map_err(|e| PluginError::StateError(format!("Failed to read directory: {}", e)))?;
 
-			while let Some(entry) = entries.next_entry().await.map_err(|e| {
-				PluginError::StateError(format!("Failed to read directory entry: {}", e))
-			})? {
-				let path = entry.path();
+		while let Some(entry) = entries.next_entry().await.map_err(|e| {
+			PluginError::StateError(format!("Failed to read directory entry: {}", e))
+		})? {
+			let path = entry.path();
 
-				if path.is_dir() {
-					self.calculate_stats(&path, total_keys, total_size).await?;
-				} else if let Some(filename) = path.file_name().and_then(|n| n.to_str()) {
-					if filename.ends_with(".json") {
-						*total_keys += 1;
-						if let Ok(metadata) = entry.metadata().await {
-							*total_size += metadata.len();
-						}
+			if path.is_dir() {
+				calculate_stats_recursive(&path, total_keys, total_size).await?;
+			} else if let Some(filename) = path.file_name().and_then(|n| n.to_str()) {
+				if filename.ends_with(".json") {
+					*total_keys += 1;
+					if let Ok(metadata) = entry.metadata().await {
+						*total_size += metadata.len();
 					}
 				}
 			}
+		}
 
-			Ok(())
-		})
-	}
+		Ok(())
+	})
+}
 
-	/// Clean up expired entries recursively
-	fn cleanup_expired<'a>(
-		&'a self,
-		dir: &'a Path,
-		keys_removed: &'a mut u64,
-		bytes_freed: &'a mut u64,
-	) -> Pin<Box<dyn Future<Output = PluginResult<()>> + Send + 'a>> {
-		Box::pin(async move {
-			let mut entries = fs::read_dir(dir)
-				.await
-				.map_err(|e| PluginError::StateError(format!("Failed to read directory: {}", e)))?;
+/// Clean up expired entries recursively
+fn cleanup_expired_recursive<'a>(
+	dir: &'a Path,
+	keys_removed: &'a mut u64,
+	bytes_freed: &'a mut u64,
+) -> Pin<Box<dyn Future<Output = PluginResult<()>> + Send + 'a>> {
+	Box::pin(async move {
+		let mut entries = fs::read_dir(dir)
+			.await
+			.map_err(|e| PluginError::StateError(format!("Failed to read directory: {}", e)))?;
 
-			while let Some(entry) = entries.next_entry().await.map_err(|e| {
-				PluginError::StateError(format!("Failed to read directory entry: {}", e))
-			})? {
-				let path = entry.path();
+		while let Some(entry) = entries.next_entry().await.map_err(|e| {
+			PluginError::StateError(format!("Failed to read directory entry: {}", e))
+		})? {
+			let path = entry.path();
 
-				if path.is_dir() {
-					self.cleanup_expired(&path, keys_removed, bytes_freed)
-						.await?;
-				} else if let Some(filename) = path.file_name().and_then(|n| n.to_str()) {
-					if filename.ends_with(".json") {
-						if let Ok(data) = fs::read(&path).await {
-							if let Ok(file_entry) = serde_json::from_slice::<FileEntry>(&data) {
-								if file_entry.is_expired() {
-									*bytes_freed += data.len() as u64;
-									*keys_removed += 1;
-									let _ = fs::remove_file(&path).await;
-								}
+			if path.is_dir() {
+				cleanup_expired_recursive(&path, keys_removed, bytes_freed).await?;
+			} else if let Some(filename) = path.file_name().and_then(|n| n.to_str()) {
+				if filename.ends_with(".json") {
+					if let Ok(data) = fs::read(&path).await {
+						if let Ok(file_entry) = serde_json::from_slice::<FileEntry>(&data) {
+							if file_entry.is_expired() {
+								*bytes_freed += data.len() as u64;
+								*keys_removed += 1;
+								let _ = fs::remove_file(&path).await;
 							}
 						}
 					}
 				}
 			}
+		}
 
-			Ok(())
-		})
-	}
+		Ok(())
+	})
 }
 
 #[async_trait]
@@ -675,8 +671,7 @@ impl StateStore for FileStore {
 		let mut keys = Vec::new();
 
 		// Recursively scan the storage directory for .json files
-		self.collect_keys(&self.config.storage_path, prefix, &mut keys)
-			.await?;
+		collect_keys_recursive(&self.config.storage_path, prefix, &mut keys).await?;
 
 		Ok(keys)
 	}
@@ -725,7 +720,7 @@ impl StateStore for FileStore {
 		let mut total_keys = 0;
 		let mut total_size = 0;
 
-		self.calculate_stats(&self.config.storage_path, &mut total_keys, &mut total_size)
+		calculate_stats_recursive(&self.config.storage_path, &mut total_keys, &mut total_size)
 			.await?;
 
 		Ok(StorageStats {
@@ -742,7 +737,7 @@ impl StateStore for FileStore {
 		let mut keys_removed = 0;
 		let mut bytes_freed = 0;
 
-		self.cleanup_expired(
+		cleanup_expired_recursive(
 			&self.config.storage_path,
 			&mut keys_removed,
 			&mut bytes_freed,

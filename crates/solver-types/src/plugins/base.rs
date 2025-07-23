@@ -26,7 +26,7 @@ pub trait BasePlugin: Send + Sync + Debug {
 	/// Get the unique identifier for this plugin type.
 	///
 	/// Returns a static string that identifies the plugin implementation type
-	/// (e.g., "eip7683_onchain", "ethers_delivery", "memory_state").
+	/// (e.g., "eip7683_onchain", "alloy_delivery", "memory_state").
 	fn plugin_type(&self) -> &'static str;
 
 	/// Get a human-readable name for this plugin instance.

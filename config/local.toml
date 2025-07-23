@@ -1,4 +1,22 @@
 # Local dual-chain development configuration for OIF Solver
+# This configuration uses templates to reduce duplication
+
+# Template definitions for reusable configurations
+[templates.local_discovery]
+plugin_type = "eip7683_onchain"
+poll_interval_ms = 3000
+enable_historical_sync = false
+
+[templates.local_delivery]
+plugin_type = "evm_alloy"
+
+[templates.local_delivery_config]
+private_key = "0xac0974bec39a17e36ba4a6b4d238ff944bacb478cbed5efcae784d7bf4f2ff80"
+max_retries = 3
+timeout_ms = 30000
+enable_eip1559 = true
+nonce_management = true
+max_pending_transactions = 10
 
 # Main solver settings
 [solver]
@@ -13,78 +31,50 @@ metrics_port = 9090
 # Discovery plugins - Origin chain (where orders are created)
 [plugins.discovery.origin_discovery]
 enabled = true
-plugin_type = "eip7683_onchain"
+template = "local_discovery"
 
 [plugins.discovery.origin_discovery.config]
 chain_id = 31337
 rpc_url = "http://localhost:8545"
-poll_interval_ms = 3000
-# Origin chain contracts
 input_settler_addresses = ["0xCf7Ed3AccA5a467e9e704C703E8D87F634fB0Fc9"]
 # Event monitoring - only monitor Open events on origin
 monitor_open = true
 monitor_finalised = false
 monitor_order_purchased = false
-# No historical sync for local dev
-enable_historical_sync = false
 
 # Discovery plugins - Destination chain (where fills are confirmed)
 [plugins.discovery.dest_discovery]
 enabled = true
-plugin_type = "eip7683_onchain"
+template = "local_discovery"
 
 [plugins.discovery.dest_discovery.config]
 chain_id = 31338
 rpc_url = "http://localhost:8546"
-poll_interval_ms = 3000
-# Destination chain contracts
 output_settler_addresses = ["0xe7f1725E7734CE288F8367e1Bb143E90bb3F0512"]
 # Event monitoring - only monitor fills and settlements on destination
 monitor_open = false
 monitor_finalised = true
 monitor_order_purchased = true
-# No historical sync for local dev
-enable_historical_sync = false
 
 # Delivery plugins - Origin chain
 [plugins.delivery.origin_delivery]
 enabled = true
-plugin_type = "evm_ethers"
+template = "local_delivery"
 
 [plugins.delivery.origin_delivery.config]
+template = "local_delivery_config"
 chain_id = 31337
 rpc_url = "http://localhost:8545"
-# Hardhat test account #0
-private_key = "0xac0974bec39a17e36ba4a6b4d238ff944bacb478cbed5efcae784d7bf4f2ff80"
-max_retries = 3
-timeout_ms = 30000
-enable_eip1559 = true
-nonce_management = true
-max_pending_transactions = 10
-# Origin chain contracts
-token_address = "0x5FbDB2315678afecb367f032d93F642f64180aa3"
-input_settler_address = "0xCf7Ed3AccA5a467e9e704C703E8D87F634fB0Fc9"
-permit2_address = "0x000000000022D473030F116dDEE9F6B43aC78BA3"
 
 # Delivery plugins - Destination chain
 [plugins.delivery.dest_delivery]
 enabled = true
-plugin_type = "evm_ethers"
+template = "local_delivery"
 
 [plugins.delivery.dest_delivery.config]
+template = "local_delivery_config"
 chain_id = 31338
 rpc_url = "http://localhost:8546"
-# Hardhat test account #0
-private_key = "0xac0974bec39a17e36ba4a6b4d238ff944bacb478cbed5efcae784d7bf4f2ff80"
-max_retries = 3
-timeout_ms = 30000
-enable_eip1559 = true
-nonce_management = true
-max_pending_transactions = 10
-# Destination chain contracts
-token_address = "0x5FbDB2315678afecb367f032d93F642f64180aa3"
-output_settler_address = "0xe7f1725E7734CE288F8367e1Bb143E90bb3F0512"
-permit2_address = "0x000000000022D473030F116dDEE9F6B43aC78BA3"
 
 # State plugins
 [plugins.state.memory_state]
@@ -95,7 +85,7 @@ plugin_type = "memory"
 max_entries = 1000
 
 [plugins.state.file_state]
-enabled = true
+enabled = false
 plugin_type = "file"
 
 [plugins.state.file_state.config]
@@ -110,7 +100,7 @@ plugin_type = "eip7683_order"
 
 [plugins.order.eip7683_order.config]
 solver_address = "0xf39Fd6e51aad88F6F4ce6aB8827279cffFb92266"
-output_settler_address = "0xe7f1725E7734CE288F8367e1Bb143E90bb3F0512"
+output_settler_addresses = ["0xe7f1725E7734CE288F8367e1Bb143E90bb3F0512"]
 input_settler_addresses = ["0xCf7Ed3AccA5a467e9e704C703E8D87F634fB0Fc9"]
 oracle_address = "0x9fE46736679d2D9a65F0992F2272dE9f3c7fa6e0"
 max_order_age_seconds = 86400
@@ -123,6 +113,8 @@ enabled = true
 plugin_type = "direct_settlement"
 
 [plugins.settlement.direct_settlement.config]
+rpc_url = "http://localhost:8545"  # Connect to origin chain where oracle is deployed
+chain_id = 31337
 oracle_address = "0x9fE46736679d2D9a65F0992F2272dE9f3c7fa6e0"
 min_confirmations = 1
 dispute_period_seconds = 10  # 10 seconds for testing
@@ -149,12 +141,19 @@ max_concurrent_sources = 2  # Both chains
 
 # State configuration
 [state]
-default_backend = "file_state"
+default_backend = "memory_state"
 enable_metrics = true
 cleanup_interval_seconds = 300  # 5 minutes
 max_concurrent_operations = 100
 
-# Contract addresses for testing
+# ============================================================================
+# DEMO SCRIPT CONFIGURATION
+# The following sections are used by demo scripts (send_intent.sh, etc.)
+# and are NOT required by the solver itself. The solver only needs the
+# plugin configurations above.
+# ============================================================================
+
+# Contract addresses for testing (used by demo scripts)
 [contracts.origin]
 chain_id = 31337
 rpc_url = "http://localhost:8545"
@@ -171,7 +170,7 @@ token = "0x5FbDB2315678afecb367f032d93F642f64180aa3"
 output_settler = "0xe7f1725E7734CE288F8367e1Bb143E90bb3F0512"
 permit2 = "0x000000000022D473030F116dDEE9F6B43aC78BA3"
 
-# Test accounts
+# Test accounts (used by demo scripts)
 [accounts]
 solver = "0xf39Fd6e51aad88F6F4ce6aB8827279cffFb92266"
 user = "0x70997970C51812dc3A010C7d01b50e0d17dc79C8"

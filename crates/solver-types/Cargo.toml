@@ -18,9 +18,6 @@ async-stream.workspace = true
 serde.workspace = true
 serde_json.workspace = true
 
-# Ethereum types
-ethers-core.workspace = true
-
 # Error handling
 thiserror.workspace = true
 anyhow.workspace = true

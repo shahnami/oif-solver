@@ -2,7 +2,7 @@
 
 The `solver-types` crate serves as the foundational type system for the entire OIF solver ecosystem. It defines all shared types, configuration structures, event systems, and most importantly, the plugin interfaces that enable the solver's extensible architecture.
 
-## 🏗️ Architecture Overview
+## Architecture Overview
 
 ```text
 ┌─────────────────────────────────────────────────────────────────────────┐
@@ -39,7 +39,7 @@ The `solver-types` crate serves as the foundational type system for the entire O
                  └─────────────────┘ └─────────────────┘
 ```
 
-## 📁 Module Structure
+## Module Structure
 
 ```
 solver-types/
@@ -60,7 +60,7 @@ solver-types/
 └── README.md
 ```
 
-## 🔑 Key Components
+## Key Components
 
 ### 1. **Configuration System** (`configs/`)
 
@@ -189,7 +189,7 @@ pub enum ConfigValue {
 }
 ```
 
-## 🔄 Type Relationships
+## Type Relationships
 
 ```text
 ┌─────────────────┐         ┌──────────────────┐
@@ -209,7 +209,7 @@ pub enum ConfigValue {
 └─────────────────┘         └──────────────────┘
 ```
 
-## 🔍 Critical Observations
+## Critical Observations
 
 ### Strengths:
 
@@ -235,14 +235,13 @@ pub enum ConfigValue {
 4. **Validation Layer**: Add configuration validation schemas
 5. **Error Context**: Rich error types with proper context
 
-## 🔗 Dependencies
+## Dependencies
 
 ### External Dependencies:
 
 - `async-trait`: Async trait support (fundamental for plugin system)
 - `tokio`: Async runtime and utilities
 - `serde`/`serde_json`: Serialization framework
-- `ethers-core`: Ethereum types (though underutilized)
 - `thiserror`/`anyhow`: Error handling
 - `chrono`: Time handling
 - `rust_decimal`: Precise decimal arithmetic
@@ -253,11 +252,10 @@ pub enum ConfigValue {
 
 ### Dependency Concerns:
 
-1. **Ethers Underutilization**: Imports ethers-core but uses string addresses
 2. **Redundant Dependencies**: Both thiserror and anyhow imported
 3. **Missing Alloy**: Newer Ethereum types library not used
 
-## 🏃 Runtime Behavior
+## Runtime Behavior
 
 ### Type Usage Flow:
 
@@ -273,7 +271,7 @@ pub enum ConfigValue {
 - `Box<dyn Trait>` for trait objects
 - `HashMap` for dynamic collections
 
-## 🐛 Known Issues & Cruft
+## Known Issues & Cruft
 
 1. **Empty Order Registry**: `OrderPluginRegistry::create_plugin` returns dummy value
 2. **Unused Decimal**: `rust_decimal` imported but not used
@@ -281,17 +279,17 @@ pub enum ConfigValue {
 4. **Missing Derive Macros**: Some types missing useful derives (Hash, Eq)
 5. **Inconsistent Defaults**: Some configs have defaults, others don't
 
-## 🔮 Future Improvements
+## Future Improvements
 
 1. **Type-Safe IDs**: Implement newtype wrappers for all ID types
-2. **Proper Address Type**: Use checksummed address type from ethers/alloy
+2. **Proper Address Type**: Use checksummed address type from alloy
 3. **Event Streaming**: Add backpressure and filtering to event system
 4. **Schema Validation**: JSON Schema for configuration validation
 5. **Plugin Versioning**: Version compatibility checking
 6. **Metric Types**: Prometheus-compatible metric types
 7. **Tracing Integration**: OpenTelemetry trace context propagation
 
-## 📊 Performance Considerations
+## Performance Considerations
 
 - **Allocation Heavy**: Many heap allocations with Box/Arc
 - **Dynamic Dispatch**: Trait objects prevent inlining
@@ -299,7 +297,7 @@ pub enum ConfigValue {
 - **HashMap Lookups**: O(1) average but with overhead
 - **Clone Operations**: Frequent cloning of configurations
 
-## ⚠️ Security Considerations
+## Security Considerations
 
 - **Input Validation**: Limited validation on external inputs
 - **Type Confusion**: String-based types allow invalid data

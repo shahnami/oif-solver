@@ -2,7 +2,7 @@
 
 The `solver-settlement` crate provides a plugin-based orchestration service that monitors fills and determines when they are ready for settlement. It manages oracle attestations, claim windows, and settlement conditions, emitting events when settlements can proceed.
 
-## 🏗️ Architecture Overview
+## Architecture Overview
 
 ```text
 ┌─────────────────────────────────────────────────────────────────────────┐
@@ -36,7 +36,7 @@ The `solver-settlement` crate provides a plugin-based orchestration service that
                         └───────────────────────┘
 ```
 
-## 📁 Module Structure
+## Module Structure
 
 ```
 solver-settlement/
@@ -46,7 +46,7 @@ solver-settlement/
 └── README.md           # This file
 ```
 
-## 🔑 Key Components
+## Key Components
 
 ### 1. **SettlementService** (`lib.rs`)
 
@@ -145,7 +145,7 @@ pub struct SettlementReadiness {
 }
 ```
 
-## 🔄 Settlement Orchestration Flow
+## Settlement Orchestration Flow
 
 ```text
 FillEvent (Confirmed) → Monitor Fill → Check Every 10s
@@ -183,7 +183,7 @@ FillEvent (Confirmed) → Monitor Fill → Check Every 10s
 5. **Event Emission**: Emit SettlementReadyEvent when ready
 6. **Remove from Monitoring**: Stop monitoring once event is emitted
 
-## 🔌 Plugin System
+## Plugin System
 
 ### SettlementPlugin Interface (Refactored):
 
@@ -223,7 +223,7 @@ pub struct SettlementConfig {
 }
 ```
 
-## 🚀 Usage Example
+## Usage Example
 
 ```rust
 use solver_settlement::{SettlementService, SettlementServiceBuilder};
@@ -280,7 +280,7 @@ tokio::spawn(async move {
 });
 ```
 
-## 🔍 Key Design Decisions
+## Key Design Decisions
 
 ### Architecture Benefits:
 
@@ -298,7 +298,7 @@ tokio::spawn(async move {
 4. **Dispute Handling**: Built-in support for dispute resolution
 5. **Flexible Timing**: Configurable dispute periods and claim windows
 
-## 🔗 Dependencies
+## Dependencies
 
 ### Internal Crates:
 
@@ -315,7 +315,7 @@ tokio::spawn(async move {
 - `chrono`: Timestamp handling
 - `thiserror`/`anyhow`: Error handling
 
-## 🏃 Runtime Behavior
+## Runtime Behavior
 
 ### Service Lifecycle:
 
@@ -339,7 +339,7 @@ tokio::spawn(async move {
 2. **Fallback Strategies**: Try each fallback if default can't handle
 3. **Chain/Type Support**: Verify plugin supports chain and order type
 
-## 🔮 Future Improvements
+## Future Improvements
 
 1. **Configurable Check Interval**: Make monitoring interval configurable
 2. **Batch Monitoring**: Check multiple fills in parallel
@@ -348,21 +348,21 @@ tokio::spawn(async move {
 5. **Multi-Oracle Support**: Support multiple oracle sources
 6. **Analytics**: Settlement readiness metrics and reporting
 
-## 📊 Performance Considerations
+## Performance Considerations
 
 - **Efficient Monitoring**: Single background task for all fills
 - **Minimal Lock Time**: Quick read/write operations on monitored fills
 - **No Blocking Operations**: All plugin calls are async
 - **Automatic Cleanup**: No memory leaks from completed fills
 
-## ⚠️ Security Considerations
+## Security Considerations
 
 - **Plugin Trust**: Plugins determine settlement readiness
 - **Oracle Dependency**: Relies on oracle attestation accuracy
 - **Timing Attacks**: Claim windows must be carefully configured
 - **Event Ordering**: Events processed in order received
 
-## 📝 Summary
+## Summary
 
 The refactored `solver-settlement` service is now a pure orchestration service that:
 - Monitors confirmed fills for settlement readiness

@@ -363,12 +363,30 @@ setup_tokens() {
 
 # Function to create configuration
 create_config() {
-    echo -e "${YELLOW}📝 Creating dual-chain solver configuration...${NC}"
+    echo -e "${YELLOW}📝 Creating dual-chain solver configuration with templates...${NC}"
     
     mkdir -p config
     
     cat > config/local.toml << EOF
 # Local dual-chain development configuration for OIF Solver
+# This configuration uses templates to reduce duplication
+
+# Template definitions for reusable configurations
+[templates.local_discovery]
+plugin_type = "eip7683_onchain"
+poll_interval_ms = 3000
+enable_historical_sync = false
+
+[templates.local_delivery]
+plugin_type = "evm_alloy"
+
+[templates.local_delivery_config]
+private_key = "$PRIVATE_KEY"
+max_retries = 3
+timeout_ms = 30000
+enable_eip1559 = true
+nonce_management = true
+max_pending_transactions = 10
 
 # Main solver settings
 [solver]
@@ -383,78 +401,50 @@ metrics_port = 9090
 # Discovery plugins - Origin chain (where orders are created)
 [plugins.discovery.origin_discovery]
 enabled = true
-plugin_type = "eip7683_onchain"
+template = "local_discovery"
 
 [plugins.discovery.origin_discovery.config]
 chain_id = $ORIGIN_CHAIN_ID
 rpc_url = "$ORIGIN_RPC_URL"
-poll_interval_ms = 3000
-# Origin chain contracts
 input_settler_addresses = ["$INPUT_SETTLER_ADDRESS"]
 # Event monitoring - only monitor Open events on origin
 monitor_open = true
 monitor_finalised = false
 monitor_order_purchased = false
-# No historical sync for local dev
-enable_historical_sync = false
 
 # Discovery plugins - Destination chain (where fills are confirmed)
 [plugins.discovery.dest_discovery]
 enabled = true
-plugin_type = "eip7683_onchain"
+template = "local_discovery"
 
 [plugins.discovery.dest_discovery.config]
 chain_id = $DEST_CHAIN_ID
 rpc_url = "$DEST_RPC_URL"
-poll_interval_ms = 3000
-# Destination chain contracts
 output_settler_addresses = ["$OUTPUT_SETTLER_ADDRESS"]
 # Event monitoring - only monitor fills and settlements on destination
 monitor_open = false
 monitor_finalised = true
 monitor_order_purchased = true
-# No historical sync for local dev
-enable_historical_sync = false
 
 # Delivery plugins - Origin chain
 [plugins.delivery.origin_delivery]
 enabled = true
-plugin_type = "evm_ethers"
+template = "local_delivery"
 
 [plugins.delivery.origin_delivery.config]
+template = "local_delivery_config"
 chain_id = $ORIGIN_CHAIN_ID
 rpc_url = "$ORIGIN_RPC_URL"
-# Hardhat test account #0
-private_key = "$PRIVATE_KEY"
-max_retries = 3
-timeout_ms = 30000
-enable_eip1559 = true
-nonce_management = true
-max_pending_transactions = 10
-# Origin chain contracts
-token_address = "$ORIGIN_TOKEN_ADDRESS"
-input_settler_address = "$INPUT_SETTLER_ADDRESS"
-permit2_address = "$ORIGIN_PERMIT2_ADDRESS"
 
 # Delivery plugins - Destination chain
 [plugins.delivery.dest_delivery]
 enabled = true
-plugin_type = "evm_ethers"
+template = "local_delivery"
 
 [plugins.delivery.dest_delivery.config]
+template = "local_delivery_config"
 chain_id = $DEST_CHAIN_ID
 rpc_url = "$DEST_RPC_URL"
-# Hardhat test account #0
-private_key = "$PRIVATE_KEY"
-max_retries = 3
-timeout_ms = 30000
-enable_eip1559 = true
-nonce_management = true
-max_pending_transactions = 10
-# Destination chain contracts
-token_address = "$DEST_TOKEN_ADDRESS"
-output_settler_address = "$OUTPUT_SETTLER_ADDRESS"
-permit2_address = "$DEST_PERMIT2_ADDRESS"
 
 # State plugins
 [plugins.state.memory_state]
@@ -465,7 +455,7 @@ plugin_type = "memory"
 max_entries = 1000
 
 [plugins.state.file_state]
-enabled = true
+enabled = false
 plugin_type = "file"
 
 [plugins.state.file_state.config]
@@ -480,7 +470,7 @@ plugin_type = "eip7683_order"
 
 [plugins.order.eip7683_order.config]
 solver_address = "$PUBLIC_KEY"
-output_settler_address = "$OUTPUT_SETTLER_ADDRESS"
+output_settler_addresses = ["$OUTPUT_SETTLER_ADDRESS"]
 input_settler_addresses = ["$INPUT_SETTLER_ADDRESS"]
 oracle_address = "$ORACLE_ADDRESS"
 max_order_age_seconds = 86400
@@ -493,6 +483,8 @@ enabled = true
 plugin_type = "direct_settlement"
 
 [plugins.settlement.direct_settlement.config]
+rpc_url = "$ORIGIN_RPC_URL"  # Connect to origin chain where oracle is deployed
+chain_id = $ORIGIN_CHAIN_ID
 oracle_address = "$ORACLE_ADDRESS"
 min_confirmations = 1
 dispute_period_seconds = 10  # 10 seconds for testing
@@ -519,12 +511,19 @@ max_concurrent_sources = 2  # Both chains
 
 # State configuration
 [state]
-default_backend = "file_state"
+default_backend = "memory_state"
 enable_metrics = true
 cleanup_interval_seconds = 300  # 5 minutes
 max_concurrent_operations = 100
 
-# Contract addresses for testing
+# ============================================================================
+# DEMO SCRIPT CONFIGURATION
+# The following sections are used by demo scripts (send_intent.sh, etc.)
+# and are NOT required by the solver itself. The solver only needs the
+# plugin configurations above.
+# ============================================================================
+
+# Contract addresses for testing (used by demo scripts)
 [contracts.origin]
 chain_id = $ORIGIN_CHAIN_ID
 rpc_url = "$ORIGIN_RPC_URL"
@@ -541,7 +540,7 @@ token = "$DEST_TOKEN_ADDRESS"
 output_settler = "$OUTPUT_SETTLER_ADDRESS"
 permit2 = "$DEST_PERMIT2_ADDRESS"
 
-# Test accounts
+# Test accounts (used by demo scripts)
 [accounts]
 solver = "$PUBLIC_KEY"
 user = "$USER_ADDR"
@@ -554,7 +553,7 @@ EOF
 ORIGIN_RPC_URL=$ORIGIN_RPC_URL
 DEST_RPC_URL=$DEST_RPC_URL
 ETH_PRIVATE_KEY=$PRIVATE_KEY
-RUST_LOG=debug
+RUST_LOG=info
 EOF
 
     echo -e "${GREEN}✅ Dual-chain configuration created${NC}"

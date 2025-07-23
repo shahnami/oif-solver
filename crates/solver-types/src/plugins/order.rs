@@ -25,8 +25,6 @@ use std::sync::Arc;
 pub trait Order: Send + Sync + Debug + Clone {
 	/// Type used for order identification
 	type Id: Send + Sync + Clone + Debug + PartialEq + Eq + std::hash::Hash;
-	/// Type for order-specific metadata
-	type Metadata: Send + Sync + Clone + Debug + Serialize + for<'de> Deserialize<'de>;
 
 	/// Unique identifier for this order.
 	///
@@ -60,11 +58,6 @@ pub trait Order: Send + Sync + Debug + Clone {
 	///
 	/// Returns the timestamp after which the order is no longer valid.
 	fn expires_at(&self) -> Timestamp;
-
-	/// Order-specific metadata.
-	///
-	/// Returns additional metadata specific to this order type.
-	fn metadata(&self) -> &Self::Metadata;
 
 	/// Serialize order to bytes for storage.
 	///
@@ -109,18 +102,12 @@ pub trait OrderPlugin: BasePlugin {
 	type Order: Order;
 	/// The order ID type used by this plugin
 	type OrderId: Send + Sync + Clone + Debug + PartialEq + Eq + std::hash::Hash;
-	/// Context type for order parsing
-	type ParseContext: Send + Sync + Clone + Debug;
 
 	/// Parse raw bytes into a typed order.
 	///
 	/// Converts raw order data into a strongly-typed order instance,
 	/// optionally using provided context for additional information.
-	async fn parse_order(
-		&self,
-		data: &[u8],
-		context: Option<Self::ParseContext>,
-	) -> PluginResult<Self::Order>;
+	async fn parse_order(&self, data: &[u8]) -> PluginResult<Self::Order>;
 
 	/// Validate order according to this standard's rules.
 	///
@@ -297,15 +284,7 @@ pub trait OrderPluginFactory: Send + Sync {
 	fn create_plugin(
 		&self,
 		config: super::PluginConfig,
-	) -> PluginResult<
-		Box<
-			dyn OrderPlugin<
-				Order = Self::Order,
-				OrderId = Self::OrderId,
-				ParseContext = Self::ParseContext,
-			>,
-		>,
-	>;
+	) -> PluginResult<Box<dyn OrderPlugin<Order = Self::Order, OrderId = Self::OrderId>>>;
 
 	/// Get the unique type identifier for this plugin factory.
 	fn plugin_type(&self) -> &'static str;
