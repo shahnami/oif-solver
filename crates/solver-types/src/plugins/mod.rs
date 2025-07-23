@@ -136,7 +136,7 @@ impl From<bool> for ConfigValue {
 /// configuration parameters specific to the plugin implementation.
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
 pub struct PluginConfig {
-	/// Type identifier for the plugin (e.g., "eip7683_onchain", "ethers_delivery")
+	/// Type identifier for the plugin (e.g., "eip7683_onchain", "alloy_delivery")
 	pub plugin_type: String,
 	/// Whether this plugin instance is enabled
 	pub enabled: bool,

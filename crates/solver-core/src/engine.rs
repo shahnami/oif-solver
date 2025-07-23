@@ -746,7 +746,7 @@ impl Orchestrator {
 						info!(
 							"Settlement transaction submitted for order {} with tx hash: {}",
 							truncate_hash(&event.fill_event.order_id),
-							truncate_hash(&response.tx_hash)
+							&response.tx_hash
 						);
 
 						// Create and send Settlement event to track the execution

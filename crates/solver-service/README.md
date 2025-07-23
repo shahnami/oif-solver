@@ -2,7 +2,7 @@
 
 The `solver-service` crate is the main executable that brings together all components of the OIF solver into a running service. It provides HTTP APIs, metrics endpoints, health checks, and graceful lifecycle management for the entire solver system.
 
-## 🏗️ Architecture Overview
+## Architecture Overview
 
 ```text
 ┌─────────────────────────────────────────────────────────────────────────┐
@@ -38,7 +38,7 @@ The `solver-service` crate is the main executable that brings together all compo
                  └─────────────────┘ └─────────────────┘
 ```
 
-## 📁 Module Structure
+## Module Structure
 
 ```
 solver-service/
@@ -50,7 +50,7 @@ solver-service/
 └── README.md           # This file
 ```
 
-## 🔑 Key Components
+## Key Components
 
 ### 1. **Main Entry Point** (`main.rs`)
 
@@ -130,7 +130,7 @@ Metrics Server (separate port):
 - HTTP tracing
 - State injection
 
-## 🔄 Service Lifecycle
+## Service Lifecycle
 
 ```text
 ┌──────────────┐     ┌──────────────┐     ┌──────────────┐
@@ -161,7 +161,7 @@ Metrics Server (separate port):
 3. **Server Abort**: Cancel HTTP/metrics servers
 4. **Exit**: Clean process termination
 
-## 🚀 Usage Examples
+## Usage Examples
 
 ### Starting the Service:
 
@@ -207,7 +207,7 @@ curl http://localhost:8080/health
 }
 ```
 
-## 🔍 Critical Observations
+## Critical Observations
 
 ### Strengths:
 
@@ -234,7 +234,7 @@ curl http://localhost:8080/health
 - ❌ Rate limiting
 - ❌ Authentication/authorization
 
-## 🔗 Dependencies
+## Dependencies
 
 ### Internal Crates:
 
@@ -260,7 +260,7 @@ curl http://localhost:8080/health
 - `toml`: Listed but not directly used
 - `hex`, `bytes`, `chrono`, `regex`: Imported but unused
 
-## 🏃 Runtime Behavior
+## Runtime Behavior
 
 ### Process Model:
 
@@ -286,7 +286,7 @@ Main Thread
 - **SIGTERM**: Graceful shutdown (Kubernetes)
 - Windows: Only Ctrl+C supported
 
-## 🐛 Known Issues & Cruft
+## Known Issues & Cruft
 
 1. **Hardcoded TODO**: Order endpoint returns dummy data
 2. **Fake Metrics**: Metrics endpoint returns static text
@@ -294,7 +294,7 @@ Main Thread
 4. **Error Unwraps**: Signal handler uses expect()
 5. **No Timeout**: Shutdown has no timeout mechanism
 
-## 🔮 Future Improvements
+## Future Improvements
 
 1. **Complete API**: Implement all planned endpoints
 2. **Real Metrics**: Integrate Prometheus properly
@@ -305,14 +305,14 @@ Main Thread
 7. **Admin UI**: Web interface for monitoring
 8. **Distributed Tracing**: OpenTelemetry integration
 
-## 📊 Performance Considerations
+## Performance Considerations
 
 - **Cloning Service**: State cloned for each request
 - **No Connection Pooling**: Each plugin manages connections
 - **Blocking Config Load**: Config loaded synchronously
 - **No Request Limits**: Unbounded request size
 
-## ⚠️ Security Considerations
+## Security Considerations
 
 - **No Auth**: All endpoints publicly accessible
 - **Config Exposure**: Admin endpoint shows secrets
@@ -320,7 +320,7 @@ Main Thread
 - **No HTTPS**: HTTP only (relies on proxy)
 - **No Rate Limiting**: Vulnerable to DoS
 
-## 📈 Monitoring & Observability
+## Monitoring & Observability
 
 Current implementation provides:
 

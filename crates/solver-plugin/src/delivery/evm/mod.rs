@@ -4,8 +4,8 @@
 //!
 //! This module contains delivery implementations for EVM-based networks including
 //! Ethereum, Polygon, BSC, and other compatible chains using various providers
-//! like Ethers.rs for transaction management.
+//! like Alloy for transaction management.
 
-pub mod ethers;
+pub mod alloy;
 
-pub use ethers::{EvmEthersConfig, EvmEthersDeliveryPlugin};
+pub use alloy::{EvmAlloyConfig, EvmAlloyDeliveryPlugin};

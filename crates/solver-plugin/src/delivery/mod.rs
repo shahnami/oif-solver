@@ -8,4 +8,4 @@
 
 pub mod evm;
 
-pub use evm::{EvmEthersConfig, EvmEthersDeliveryPlugin};
+pub use evm::{EvmAlloyConfig, EvmAlloyDeliveryPlugin};

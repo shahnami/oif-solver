@@ -155,14 +155,107 @@ impl ConfigLoader {
 	async fn load_from_file(&self, file_path: &str) -> Result<SolverConfig, ConfigError> {
 		let content = tokio::fs::read_to_string(file_path).await?;
 
+		// Process templates first
+		let templated_content = self.process_templates(&content)?;
+
 		// Substitute environment variables
-		let substituted_content = self.substitute_env_vars(&content)?;
+		let substituted_content = self.substitute_env_vars(&templated_content)?;
 
 		// Parse TOML
 		let config: SolverConfig = toml::from_str(&substituted_content)
 			.map_err(|e| ConfigError::ParseError(e.to_string()))?;
 
 		Ok(config)
+	}
+
+	/// Process configuration templates for reusable plugin configurations.
+	///
+	/// Extracts template definitions from the [templates] section and replaces
+	/// template references throughout the configuration. Templates allow sharing
+	/// common configuration between multiple plugin instances.
+	///
+	/// Template references use the syntax: `template = "template_name"`
+	///
+	/// # Arguments
+	/// * `content` - Raw configuration file content with potential template definitions
+	///
+	/// # Returns
+	/// Configuration content with all template references expanded
+	///
+	/// # Errors
+	/// Returns error if TOML parsing fails or template references are invalid
+	fn process_templates(&self, content: &str) -> Result<String, ConfigError> {
+		// First, parse the TOML to extract templates
+		let mut value: toml::Value = toml::from_str(content).map_err(|e| {
+			ConfigError::ParseError(format!(
+				"Failed to parse TOML for template processing: {}",
+				e
+			))
+		})?;
+
+		// Extract templates section if it exists
+		let templates = value
+			.get("templates")
+			.and_then(|t| t.as_table())
+			.cloned()
+			.unwrap_or_default();
+
+		if templates.is_empty() {
+			// No templates defined, return content as-is
+			return Ok(content.to_string());
+		}
+
+		// Process templates recursively using a closure
+		fn expand_value(
+			value: &mut toml::Value,
+			templates: &toml::map::Map<String, toml::Value>,
+		) -> Result<(), ConfigError> {
+			match value {
+				toml::Value::Table(table) => {
+					// Check if this table has a template reference
+					if let Some(toml::Value::String(template_name)) = table.get("template") {
+						if let Some(template_value) = templates.get(template_name) {
+							if let Some(template_table) = template_value.as_table() {
+								// Remove the template key
+								table.remove("template");
+
+								// Merge template values (template values first, so they can be overridden)
+								for (key, val) in template_table.iter() {
+									if !table.contains_key(key) {
+										table.insert(key.clone(), val.clone());
+									}
+								}
+							}
+						}
+					}
+
+					// Recursively process all values in the table
+					for (_, val) in table.iter_mut() {
+						expand_value(val, templates)?;
+					}
+				}
+				toml::Value::Array(array) => {
+					// Recursively process array elements
+					for val in array.iter_mut() {
+						expand_value(val, templates)?;
+					}
+				}
+				_ => {} // Other value types don't need processing
+			}
+			Ok(())
+		}
+
+		expand_value(&mut value, &templates)?;
+
+		// Remove templates section
+		if let Some(table) = value.as_table_mut() {
+			table.remove("templates");
+		}
+
+		// Convert back to TOML string
+		toml::to_string(&value).map_err(|e| {
+			ConfigError::ParseError(format!("Failed to serialize processed TOML: {}", e))
+		})
 	}
 
 	/// Substitute environment variables in configuration content.
@@ -251,22 +344,598 @@ impl ConfigLoader {
 	/// # Errors
 	/// Returns error if required plugins are missing or configuration is invalid
 	fn validate_config(&self, config: &SolverConfig) -> Result<(), ConfigError> {
-		let has_enabled_delivery = config.plugins.delivery.values().any(|p| p.enabled);
-
-		let has_enabled_state = config.plugins.state.values().any(|p| p.enabled);
-
-		if !has_enabled_delivery {
-			return Err(ConfigError::ValidationError(
-				"At least one delivery plugin must be enabled".to_string(),
-			));
+		let mut missing_plugins = Vec::new();
+		if !config.plugins.delivery.values().any(|p| p.enabled) {
+			missing_plugins.push("delivery");
+		}
+		if !config.plugins.state.values().any(|p| p.enabled) {
+			missing_plugins.push("state");
+		}
+		if !config.plugins.settlement.values().any(|p| p.enabled) {
+			missing_plugins.push("settlement");
+		}
+		if !config.plugins.discovery.values().any(|p| p.enabled) {
+			missing_plugins.push("discovery");
 		}
 
-		if !has_enabled_state {
-			return Err(ConfigError::ValidationError(
-				"At least one state plugin must be enabled".to_string(),
-			));
+		if !missing_plugins.is_empty() {
+			return Err(ConfigError::ValidationError(format!(
+				"At least one plugin must be enabled for each of: {}",
+				missing_plugins.join(", ")
+			)));
 		}
 
 		Ok(())
+	}
+}
+
+#[cfg(test)]
+mod tests {
+	use super::*;
+	use std::io::Write;
+	use tempfile::NamedTempFile;
+
+	#[tokio::test]
+	async fn test_template_processing() {
+		let config_content = r#"
+[templates.common_discovery]
+plugin_type = "eip7683_onchain"
+
+[templates.common_discovery_config]
+poll_interval_ms = 3000
+enable_historical_sync = false
+
+[templates.common_delivery]
+plugin_type = "evm_alloy"
+
+[templates.common_delivery_config]
+max_retries = 3
+timeout_ms = 30000
+enable_eip1559 = true
+
+[solver]
+name = "test-solver"
+log_level = "info"
+http_port = 8080
+metrics_port = 9090
+
+[plugins.discovery.origin]
+enabled = true
+template = "common_discovery"
+
+[plugins.discovery.origin.config]
+template = "common_discovery_config"
+chain_id = 1
+rpc_url = "http://localhost:8545"
+
+[plugins.delivery.origin]
+enabled = true
+template = "common_delivery"
+
+[plugins.delivery.origin.config]
+template = "common_delivery_config"
+chain_id = 1
+rpc_url = "http://localhost:8545"
+private_key = "0x123"
+
+[plugins.state.memory]
+enabled = true
+plugin_type = "memory"
+
+[plugins.state.memory.config]
+max_entries = 1000
+
+[plugins.order.test_order]
+enabled = true
+plugin_type = "test_order"
+
+[plugins.order.test_order.config]
+
+[plugins.settlement.test_settlement]
+enabled = true
+plugin_type = "test_settlement"
+
+[plugins.settlement.test_settlement.config]
+
+# Service configurations
+[discovery]
+realtime_monitoring = true
+
+[state]
+default_backend = "memory"
+enable_metrics = false
+cleanup_interval_seconds = 300
+max_concurrent_operations = 100
+
+[delivery]
+strategy = "RoundRobin"
+fallback_enabled = false
+max_parallel_attempts = 2
+
+[settlement]
+default_strategy = "test_settlement"
+fallback_strategies = []
+profit_threshold_wei = "0"
+"#;
+
+		// Create a temporary file
+		let mut temp_file = NamedTempFile::new().unwrap();
+		temp_file.write_all(config_content.as_bytes()).unwrap();
+
+		// Load configuration
+		let loader = ConfigLoader::new().with_file(temp_file.path());
+		let config = loader.load().await.unwrap();
+
+		// Verify template values were applied
+		let origin_discovery = &config.plugins.discovery["origin"];
+		assert_eq!(origin_discovery.plugin_type, "eip7683_onchain");
+		assert_eq!(
+			origin_discovery.get_number("poll_interval_ms").unwrap(),
+			3000
+		);
+		assert!(!origin_discovery.get_bool("enable_historical_sync").unwrap());
+		assert_eq!(origin_discovery.get_number("chain_id").unwrap(), 1);
+		assert_eq!(
+			origin_discovery.get_string("rpc_url").unwrap(),
+			"http://localhost:8545"
+		);
+
+		let origin_delivery = &config.plugins.delivery["origin"];
+		assert_eq!(origin_delivery.plugin_type, "evm_alloy");
+		assert_eq!(origin_delivery.get_number("max_retries").unwrap(), 3);
+		assert_eq!(origin_delivery.get_number("timeout_ms").unwrap(), 30000);
+		assert!(origin_delivery.get_bool("enable_eip1559").unwrap());
+		assert_eq!(origin_delivery.get_string("private_key").unwrap(), "0x123");
+	}
+
+	#[test]
+	fn test_template_processing_no_templates() {
+		let content = r#"
+[solver]
+name = "test-solver"
+log_level = "info"
+"#;
+
+		let loader = ConfigLoader::new();
+		let result = loader.process_templates(content).unwrap();
+
+		// Content should remain unchanged when no templates are defined
+		assert!(result.contains("[solver]"));
+		assert!(result.contains("name = \"test-solver\""));
+	}
+
+	#[test]
+	fn test_template_processing_removes_template_section() {
+		let content = r#"
+[templates.test]
+value = "test"
+
+[solver]
+name = "test-solver"
+"#;
+
+		let loader = ConfigLoader::new();
+		let result = loader.process_templates(content).unwrap();
+
+		// Templates section should be removed
+		assert!(!result.contains("[templates"));
+		assert!(!result.contains("value = \"test\""));
+		assert!(result.contains("[solver]"));
+	}
+
+	#[tokio::test]
+	async fn test_env_vars_in_templates() {
+		// Set up environment variables
+		env::set_var("TEST_PRIVATE_KEY", "0xabcdef123456");
+		env::set_var("TEST_RPC_URL", "http://test.rpc.url");
+		env::set_var("TEST_TOKEN_ADDRESS", "0x1234567890");
+
+		let config_content = r#"
+[templates.delivery_config]
+private_key = "${TEST_PRIVATE_KEY}"
+rpc_url = "${TEST_RPC_URL}"
+max_retries = 5
+
+[solver]
+name = "test-solver"
+log_level = "info"
+http_port = 8080
+metrics_port = 9090
+
+[plugins.discovery.test]
+enabled = true
+plugin_type = "test_discovery"
+
+[plugins.discovery.test.config]
+
+[plugins.delivery.test]
+enabled = true
+plugin_type = "evm_alloy"
+
+[plugins.delivery.test.config]
+template = "delivery_config"
+chain_id = 1
+token_address = "${TEST_TOKEN_ADDRESS}"
+
+[plugins.state.memory]
+enabled = true
+plugin_type = "memory"
+
+[plugins.state.memory.config]
+max_entries = 1000
+
+[plugins.order.test_order]
+enabled = true
+plugin_type = "test_order"
+
+[plugins.order.test_order.config]
+
+[plugins.settlement.test_settlement]
+enabled = true
+plugin_type = "test_settlement"
+
+[plugins.settlement.test_settlement.config]
+
+# Service configurations
+[discovery]
+realtime_monitoring = true
+
+[state]
+default_backend = "memory"
+enable_metrics = false
+cleanup_interval_seconds = 300
+max_concurrent_operations = 100
+
+[delivery]
+strategy = "RoundRobin"
+fallback_enabled = false
+max_parallel_attempts = 1
+
+[settlement]
+default_strategy = "test_settlement"
+fallback_strategies = []
+profit_threshold_wei = "0"
+monitor_interval_seconds = 30
+"#;
+
+		// Write configuration to a temporary file
+		let mut temp_file = NamedTempFile::new().unwrap();
+		temp_file.write_all(config_content.as_bytes()).unwrap();
+
+		// Load configuration
+		let loader = ConfigLoader::new().with_file(temp_file.path());
+		let config = loader.load().await.unwrap();
+
+		// Verify environment variables were substituted in template values
+		let test_delivery = &config.plugins.delivery["test"];
+		assert_eq!(
+			test_delivery.get_string("private_key").unwrap(),
+			"0xabcdef123456"
+		);
+		assert_eq!(
+			test_delivery.get_string("rpc_url").unwrap(),
+			"http://test.rpc.url"
+		);
+		assert_eq!(test_delivery.get_number("max_retries").unwrap(), 5);
+		assert_eq!(
+			test_delivery.get_string("token_address").unwrap(),
+			"0x1234567890"
+		);
+
+		// Clean up
+		env::remove_var("TEST_PRIVATE_KEY");
+		env::remove_var("TEST_RPC_URL");
+		env::remove_var("TEST_TOKEN_ADDRESS");
+	}
+
+	#[tokio::test]
+	async fn test_env_var_override_template_value() {
+		// Set up environment variable
+		env::set_var("TEST_OVERRIDE_VALUE", "overridden");
+
+		let config_content = r#"
+[templates.test_template]
+value1 = "${TEST_OVERRIDE_VALUE}"
+value2 = "template_default"
+
+[solver]
+name = "test-solver"
+log_level = "info"
+http_port = 8080
+metrics_port = 9090
+
+[plugins.discovery.test]
+enabled = true
+plugin_type = "test_plugin"
+
+[plugins.discovery.test.config]
+template = "test_template"
+value1 = "explicit_override"
+value3 = "additional_value"
+
+[plugins.state.memory]
+enabled = true
+plugin_type = "memory"
+
+[plugins.state.memory.config]
+max_entries = 1000
+
+[plugins.delivery.test]
+enabled = true
+plugin_type = "test_delivery"
+
+[plugins.delivery.test.config]
+
+[plugins.order.test_order]
+enabled = true
+plugin_type = "test_order"
+
+[plugins.order.test_order.config]
+
+[plugins.settlement.test_settlement]
+enabled = true
+plugin_type = "test_settlement"
+
+[plugins.settlement.test_settlement.config]
+
+# Service configurations
+[discovery]
+realtime_monitoring = true
+
+[state]
+default_backend = "memory"
+enable_metrics = false
+cleanup_interval_seconds = 300
+max_concurrent_operations = 100
+
+[delivery]
+strategy = "RoundRobin"
+fallback_enabled = false
+max_parallel_attempts = 1
+
+[settlement]
+default_strategy = "test_settlement"
+fallback_strategies = []
+profit_threshold_wei = "0"
+monitor_interval_seconds = 30
+"#;
+
+		// Write configuration to a temporary file
+		let mut temp_file = NamedTempFile::new().unwrap();
+		temp_file.write_all(config_content.as_bytes()).unwrap();
+
+		// Load configuration
+		let loader = ConfigLoader::new().with_file(temp_file.path());
+		let config = loader.load().await.unwrap();
+
+		// Verify explicit values override template values
+		let test_discovery = &config.plugins.discovery["test"];
+		assert_eq!(
+			test_discovery.get_string("value1").unwrap(),
+			"explicit_override"
+		);
+		assert_eq!(
+			test_discovery.get_string("value2").unwrap(),
+			"template_default"
+		);
+		assert_eq!(
+			test_discovery.get_string("value3").unwrap(),
+			"additional_value"
+		);
+
+		// Clean up
+		env::remove_var("TEST_OVERRIDE_VALUE");
+	}
+
+	#[tokio::test]
+	async fn test_env_vars_runtime_overrides() {
+		// Set up runtime override environment variables
+		env::set_var("SOLVER_LOG_LEVEL", "debug");
+		env::set_var("SOLVER_HTTP_PORT", "9999");
+		env::set_var("SOLVER_METRICS_PORT", "8888");
+
+		let config_content = r#"
+[solver]
+name = "test-solver"
+log_level = "info"
+http_port = 8080
+metrics_port = 9090
+
+[plugins.discovery.test]
+enabled = true
+plugin_type = "test_discovery"
+
+[plugins.discovery.test.config]
+
+[plugins.state.memory]
+enabled = true
+plugin_type = "memory"
+
+[plugins.state.memory.config]
+max_entries = 1000
+
+[plugins.delivery.test]
+enabled = true
+plugin_type = "test_delivery"
+
+[plugins.delivery.test.config]
+
+[plugins.order.test_order]
+enabled = true
+plugin_type = "test_order"
+
+[plugins.order.test_order.config]
+
+[plugins.settlement.test_settlement]
+enabled = true
+plugin_type = "test_settlement"
+
+[plugins.settlement.test_settlement.config]
+
+# Service configurations
+[discovery]
+realtime_monitoring = true
+
+[state]
+default_backend = "memory"
+enable_metrics = false
+cleanup_interval_seconds = 300
+max_concurrent_operations = 100
+
+[delivery]
+strategy = "RoundRobin"
+fallback_enabled = false
+max_parallel_attempts = 1
+
+[settlement]
+default_strategy = "test_settlement"
+fallback_strategies = []
+profit_threshold_wei = "0"
+monitor_interval_seconds = 30
+"#;
+
+		// Write configuration to a temporary file
+		let mut temp_file = NamedTempFile::new().unwrap();
+		temp_file.write_all(config_content.as_bytes()).unwrap();
+
+		// Load configuration
+		let loader = ConfigLoader::new().with_file(temp_file.path());
+		let config = loader.load().await.unwrap();
+
+		// Verify runtime overrides were applied
+		assert_eq!(config.solver.log_level, "debug");
+		assert_eq!(config.solver.http_port, 9999);
+		assert_eq!(config.solver.metrics_port, 8888);
+
+		// Clean up
+		env::remove_var("SOLVER_LOG_LEVEL");
+		env::remove_var("SOLVER_HTTP_PORT");
+		env::remove_var("SOLVER_METRICS_PORT");
+	}
+
+	#[tokio::test]
+	async fn test_missing_env_var_error() {
+		let config_content = r#"
+[templates.error_template]
+missing_var = "${MISSING_ENV_VAR}"
+
+[solver]
+name = "test-solver"
+log_level = "info"
+http_port = 8080
+metrics_port = 9090
+
+[plugins.discovery.test]
+enabled = true
+plugin_type = "test_plugin"
+
+[plugins.discovery.test.config]
+template = "error_template"
+
+[plugins.state.memory]
+enabled = true
+plugin_type = "memory"
+
+[plugins.state.memory.config]
+max_entries = 1000
+"#;
+
+		// Write configuration to a temporary file
+		let mut temp_file = NamedTempFile::new().unwrap();
+		temp_file.write_all(config_content.as_bytes()).unwrap();
+
+		// Load configuration should fail due to missing env var
+		let loader = ConfigLoader::new().with_file(temp_file.path());
+		let result = loader.load().await;
+
+		assert!(result.is_err());
+		match result {
+			Err(ConfigError::EnvVarNotFound(var)) => {
+				assert_eq!(var, "MISSING_ENV_VAR");
+			}
+			_ => panic!("Expected EnvVarNotFound error"),
+		}
+	}
+
+	#[tokio::test]
+	async fn test_env_prefix_customization() {
+		// Set up environment variable with custom prefix
+		env::set_var("CUSTOM_LOG_LEVEL", "warn");
+
+		let config_content = r#"
+[solver]
+name = "test-solver"
+log_level = "info"
+http_port = 8080
+metrics_port = 9090
+
+[plugins.discovery.test]
+enabled = true
+plugin_type = "test_discovery"
+
+[plugins.discovery.test.config]
+
+[plugins.state.memory]
+enabled = true
+plugin_type = "memory"
+
+[plugins.state.memory.config]
+max_entries = 1000
+
+[plugins.delivery.test]
+enabled = true
+plugin_type = "test_delivery"
+
+[plugins.delivery.test.config]
+
+[plugins.order.test_order]
+enabled = true
+plugin_type = "test_order"
+
+[plugins.order.test_order.config]
+
+[plugins.settlement.test_settlement]
+enabled = true
+plugin_type = "test_settlement"
+
+[plugins.settlement.test_settlement.config]
+
+# Service configurations
+[discovery]
+realtime_monitoring = true
+
+[state]
+default_backend = "memory"
+enable_metrics = false
+cleanup_interval_seconds = 300
+max_concurrent_operations = 100
+
+[delivery]
+strategy = "RoundRobin"
+fallback_enabled = false
+max_parallel_attempts = 1
+
+[settlement]
+default_strategy = "test_settlement"
+fallback_strategies = []
+profit_threshold_wei = "0"
+monitor_interval_seconds = 30
+"#;
+
+		// Write configuration to a temporary file
+		let mut temp_file = NamedTempFile::new().unwrap();
+		temp_file.write_all(config_content.as_bytes()).unwrap();
+
+		// Load configuration with custom prefix
+		let loader = ConfigLoader::new()
+			.with_file(temp_file.path())
+			.with_env_prefix("CUSTOM_");
+		let config = loader.load().await.unwrap();
+
+		// Verify custom prefix was used
+		assert_eq!(config.solver.log_level, "warn");
+
+		// Clean up
+		env::remove_var("CUSTOM_LOG_LEVEL");
 	}
 }

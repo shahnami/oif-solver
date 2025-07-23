@@ -54,7 +54,6 @@ impl<P> OrderProcessor for OrderPluginProcessor<P>
 where
 	P: OrderPlugin + Send + Sync + 'static,
 	P::Order: 'static,
-	P::ParseContext: Default + 'static,
 {
 	/// Processes an order event to generate a fill transaction.
 	///
@@ -75,7 +74,7 @@ where
 		// Parse the order using the plugin
 		let order = self
 			.plugin
-			.parse_order(&event.raw_data, Some(P::ParseContext::default()))
+			.parse_order(&event.raw_data)
 			.await
 			.map_err(|e| PluginError::ExecutionFailed(format!("Failed to parse order: {}", e)))?;
 
@@ -144,11 +143,10 @@ where
 		};
 
 		// Parse the order using the plugin
-		let order = self
-			.plugin
-			.parse_order(order_data, Some(P::ParseContext::default()))
-			.await
-			.map_err(|e| PluginError::ExecutionFailed(format!("Failed to parse order: {}", e)))?;
+		let order =
+			self.plugin.parse_order(order_data).await.map_err(|e| {
+				PluginError::ExecutionFailed(format!("Failed to parse order: {}", e))
+			})?;
 
 		// Create the settlement request using the plugin
 		match self

@@ -2,17 +2,17 @@
 
 The `solver-config` crate provides a simple yet powerful configuration loading system for the OIF solver. It handles TOML file parsing, environment variable substitution, and validation to ensure the solver starts with a valid configuration.
 
-## 🏗️ Architecture Overview
+## Architecture Overview
 
 ```text
 ┌─────────────────────────────────────────────────────────────────────────┐
 │                         CONFIG LOADER                                    │
 │  ┌───────────────────────────────────────────────────────────────────┐  │
 │  │                    Loading Pipeline                                │  │
-│  │  ┌─────────────┐  ┌──────────────┐  ┌────────────────────────┐  │  │
-│  │  │ TOML File   │  │ Env Variable │  │   Validation           │  │  │
-│  │  │ Loading     │─▶│ Substitution │─▶│   & Override           │  │  │
-│  │  └─────────────┘  └──────────────┘  └────────────────────────┘  │  │
+│  │  ┌──────────┐  ┌──────────┐  ┌────────────┐  ┌────────────────┐  │  │
+│  │  │   TOML   │  │ Template │  │    Env     │  │  Validation    │  │  │
+│  │  │  Loading │─▶│ Process  │─▶│ Substitute │─▶│  & Override    │  │  │
+│  │  └──────────┘  └──────────┘  └────────────┘  └────────────────┘  │  │
 │  └───────────────────────────────────────────────────────────────────┘  │
 │                                                                          │
 │  ┌───────────────────────────────────────────────────────────────────┐  │
@@ -25,20 +25,17 @@ The `solver-config` crate provides a simple yet powerful configuration loading s
 └─────────────────────────────────────────────────────────────────────────┘
 ```
 
-## 📁 Module Structure
+## Module Structure
 
 ```
 solver-config/
 ├── src/
 │   └── lib.rs          # Configuration loader implementation
-├── config/             # Example configurations (in parent)
-│   ├── example.toml    # Example with all options
-│   └── local.toml      # Local development config
 ├── Cargo.toml
 └── README.md
 ```
 
-## 🔑 Key Components
+## Key Components
 
 ### 1. **ConfigLoader** (`lib.rs`)
 
@@ -65,13 +62,15 @@ The loading process follows these steps:
 ```text
 1. Load TOML File
       ↓
-2. Substitute ${VAR_NAME} placeholders
+2. Process template definitions
       ↓
-3. Apply SOLVER_* env overrides
+3. Substitute ${VAR_NAME} placeholders
       ↓
-4. Validate configuration
+4. Apply SOLVER_* env overrides
       ↓
-5. Return SolverConfig
+5. Validate configuration
+      ↓
+6. Return SolverConfig
 ```
 
 ### 3. **Error Handling**
@@ -88,22 +87,7 @@ pub enum ConfigError {
 }
 ```
 
-## 🔄 Configuration Loading Flow
-
-```text
-┌──────────────────┐     ┌──────────────────┐     ┌──────────────────┐
-│   config.toml    │────▶│  Read & Parse    │────▶│  Env Variable    │
-│                  │     │   TOML File      │     │  Substitution    │
-└──────────────────┘     └──────────────────┘     └──────────────────┘
-                                                            │
-                                                            ▼
-┌──────────────────┐     ┌──────────────────┐     ┌──────────────────┐
-│  SolverConfig    │◀────│    Validate      │◀────│   Apply Env      │
-│   (validated)    │     │  Configuration   │     │   Overrides      │
-└──────────────────┘     └──────────────────┘     └──────────────────┘
-```
-
-## 🚀 Usage Example
+## Usage Example
 
 ```rust
 use solver_config::ConfigLoader;
@@ -122,7 +106,7 @@ let config = ConfigLoader::new()
     .await?;
 ```
 
-## 📝 Configuration File Format
+## Configuration File Format
 
 The configuration uses TOML format with the following structure:
 
@@ -143,7 +127,7 @@ max_entries = 10000
 
 [plugins.delivery.eth_delivery]
 enabled = true
-plugin_type = "evm_ethers"
+plugin_type = "evm_alloy"
 [plugins.delivery.eth_delivery.config]
 chain_id = 1
 rpc_url = "https://eth-mainnet.g.alchemy.com/v2/${ALCHEMY_KEY}"
@@ -160,7 +144,52 @@ default_backend = "memory_state"
 cleanup_interval_seconds = 300
 ```
 
-## 🌍 Environment Variable Support
+### Configuration Templates
+
+To reduce duplication in multi-chain configurations, you can define reusable templates:
+
+```toml
+# Define templates at the top of your config
+[templates.mainnet_discovery]
+plugin_type = "eip7683_onchain"
+poll_interval_ms = 5000
+enable_historical_sync = false
+
+[templates.mainnet_delivery]
+plugin_type = "evm_alloy"
+max_retries = 3
+timeout_ms = 30000
+enable_eip1559 = true
+nonce_management = true
+
+# Use templates in plugin configurations
+[plugins.discovery.eth_discovery]
+enabled = true
+template = "mainnet_discovery"  # Inherits all template values
+
+[plugins.discovery.eth_discovery.config]
+chain_id = 1
+rpc_url = "https://eth-mainnet.g.alchemy.com/v2/${ALCHEMY_KEY}"
+input_settler_addresses = ["0x..."]
+
+[plugins.discovery.arb_discovery]
+enabled = true
+template = "mainnet_discovery"  # Reuse same template
+
+[plugins.discovery.arb_discovery.config]
+chain_id = 42161
+rpc_url = "https://arb-mainnet.g.alchemy.com/v2/${ALCHEMY_KEY}"
+input_settler_addresses = ["0x..."]
+```
+
+**Template Benefits:**
+
+- Reduce configuration duplication
+- Ensure consistency across similar plugins
+- Simplify multi-chain setups
+- Templates are removed from final configuration
+
+## Environment Variable Support
 
 ### Variable Substitution
 
@@ -190,7 +219,7 @@ Currently supported overrides:
 - `SOLVER_HTTP_PORT` - Override HTTP API port
 - `SOLVER_METRICS_PORT` - Override metrics port
 
-## 🔍 Critical Observations
+## Critical Observations
 
 ### Strengths:
 
@@ -218,7 +247,7 @@ The existing README describes a much more complex system than what's implemented
 - ❌ No configuration history
 - ✅ Simple TOML loading with env vars (actual implementation)
 
-## 🔗 Dependencies
+## Dependencies
 
 ### Internal Crates:
 
@@ -238,7 +267,7 @@ The existing README describes a much more complex system than what's implemented
 2. **Regex Overhead**: Could use simpler string matching
 3. **Missing config crate**: Could use standard config management
 
-## 🏃 Runtime Behavior
+## Runtime Behavior
 
 ### Loading Sequence:
 
@@ -255,7 +284,7 @@ The existing README describes a much more complex system than what's implemented
 - Parse errors → TOML error details
 - Validation → Specific requirement failures
 
-## 🐛 Known Issues & Cruft
+## Known Issues & Cruft
 
 1. **Regex Compilation**: Regex compiled on every load (line 89)
 2. **Limited Validation**: Only checks enabled plugins, not configs
@@ -263,7 +292,7 @@ The existing README describes a much more complex system than what's implemented
 4. **No Default File**: Must explicitly specify config file
 5. **Unused Dependencies**: serde_json imported but not used
 
-## 🔮 Future Improvements
+## Future Improvements
 
 1. **Expand Env Overrides**: Support all configuration fields
 2. **Config Validation**: JSON Schema or similar validation
@@ -273,14 +302,14 @@ The existing README describes a much more complex system than what's implemented
 6. **Encrypted Secrets**: Support for encrypted values
 7. **Remote Config**: Fetch from HTTP/S3/etcd
 
-## 📊 Performance Considerations
+## Performance Considerations
 
 - **Regex Cost**: Pattern matching for every substitution
 - **File I/O**: Async but still blocks on parse
 - **Validation**: Minimal overhead (just enabled checks)
 - **Memory**: Entire config held in memory
 
-## ⚠️ Security Considerations
+## Security Considerations
 
 - **Private Keys**: Stored in plaintext in config
 - **Env Var Exposure**: All env vars accessible
@@ -288,7 +317,7 @@ The existing README describes a much more complex system than what's implemented
 - **File Permissions**: No checks on config file access
 - **Injection Risk**: Env var substitution could be exploited
 
-## 📋 Configuration Examples
+## Configuration Examples
 
 ### Minimal Configuration:
 
@@ -305,7 +334,7 @@ plugin_type = "memory"
 
 [plugins.delivery.local]
 enabled = true
-plugin_type = "evm_ethers"
+plugin_type = "evm_alloy"
 [plugins.delivery.local.config]
 chain_id = 1
 rpc_url = "http://localhost:8545"

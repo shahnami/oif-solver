@@ -17,7 +17,6 @@ tokio.workspace = true
 async-trait.workspace = true
 
 # Ethereum (already included in workspace)
-ethers.workspace = true
 alloy.workspace = true
 
 # Serialization

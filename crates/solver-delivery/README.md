@@ -2,7 +2,7 @@
 
 The `solver-delivery` crate is responsible for orchestrating transaction submission across multiple blockchain networks through a plugin-based architecture. It manages both order filling and settlement transactions with configurable delivery strategies.
 
-## 🏗️ Architecture Overview
+## Architecture Overview
 
 ```text
 ┌─────────────────────────────────────────────────────────────────────────┐
@@ -38,7 +38,7 @@ The `solver-delivery` crate is responsible for orchestrating transaction submiss
                     └────────────┘   └────────────────┘
 ```
 
-## 📁 Module Structure
+## Module Structure
 
 ```
 solver-delivery/
@@ -48,7 +48,7 @@ solver-delivery/
 └── README.md           # This file
 ```
 
-## 🔑 Key Components
+## Key Components
 
 ### 1. **DeliveryService** (`lib.rs`)
 The main service that orchestrates transaction delivery through plugins.
@@ -90,7 +90,7 @@ pub struct DeliveryTracker {
 - **Delivery Plugins**: Handle actual transaction submission (RPC, relayers, bundlers)
 - **Order Processors**: Convert order/fill events into transaction requests
 
-## 🔄 Transaction Flow
+## Transaction Flow
 
 ```text
 OrderEvent → OrderProcessor → TransactionRequest → DeliveryService
@@ -113,7 +113,7 @@ OrderEvent → OrderProcessor → TransactionRequest → DeliveryService
 5. **Status Tracking**: Service monitors transaction status
 6. **Settlement**: FillEvent triggers settlement transaction
 
-## 🔌 Plugin System
+## Plugin System
 
 ### DeliveryPlugin Interface:
 ```rust
@@ -141,7 +141,7 @@ pub trait OrderProcessor: Send + Sync {
 }
 ```
 
-## 🚀 Usage Example
+## Usage Example
 
 ```rust
 use solver_delivery::{DeliveryService, DeliveryServiceBuilder};
@@ -176,7 +176,7 @@ let status = service.get_transaction_status(&tx_hash, chain_id).await?;
 let health_status = service.health_check().await?;
 ```
 
-## 🔍 Critical Observations
+## Critical Observations
 
 ### Strengths:
 1. **Plugin Isolation**: Each plugin manages its own connections and state
@@ -199,7 +199,7 @@ let health_status = service.health_check().await?;
 4. **Batch Processing**: Support batching multiple transactions
 5. **Priority Queue**: Implement priority-based transaction queuing
 
-## 🔗 Dependencies
+## Dependencies
 
 ### Internal Crates:
 - `solver-types`: Core type definitions and plugin traits
@@ -213,7 +213,7 @@ let health_status = service.health_check().await?;
 - `bytes`: Byte manipulation
 - `thiserror`/`anyhow`: Error handling
 
-## 🏃 Runtime Behavior
+## Runtime Behavior
 
 ### Service Lifecycle:
 1. **Initialization**: Plugins are initialized during builder.build()
@@ -229,7 +229,7 @@ let health_status = service.health_check().await?;
 4. **Attempt Recording**: Track each delivery attempt
 5. **Status Updates**: Update tracking status on completion/failure
 
-## 🐛 Known Issues & Cruft
+## Known Issues & Cruft
 
 1. **Incomplete Strategies**: Only RoundRobin is implemented despite multiple strategies in types
 2. **Unused Config**: `max_parallel_attempts` and `fallback_enabled` are stored but never used
@@ -238,7 +238,7 @@ let health_status = service.health_check().await?;
 5. **Timestamp Generation**: Repeated timestamp code could be extracted
 6. **Error Context**: Many errors lose context during propagation
 
-## 🔮 Future Improvements
+## Future Improvements
 
 1. **Complete Strategy Implementation**: Implement all delivery strategies
 2. **Delivery Cleanup**: Add TTL-based cleanup for old deliveries
@@ -248,14 +248,14 @@ let health_status = service.health_check().await?;
 6. **WebSocket Support**: Real-time transaction status updates
 7. **Gas Oracle Integration**: Better gas price estimation
 
-## 📊 Performance Considerations
+## Performance Considerations
 
 - **Lock Contention**: Multiple RwLocks could cause contention under load
 - **Plugin Iteration**: Linear search through plugins for each request
 - **Memory Usage**: Unbounded delivery tracking map
 - **No Caching**: Network status and estimates not cached
 
-## ⚠️ Security Considerations
+## Security Considerations
 
 - **Plugin Trust**: All plugins have full access to transaction data
 - **Key Management**: No built-in key management - relies on plugins

@@ -2,7 +2,7 @@
 
 The `solver-state` crate provides a plugin-based state management service that abstracts storage backends behind a unified interface. It enables seamless switching between different storage systems (memory, file, Redis, etc.) while maintaining a consistent API for the solver's runtime and persistent storage needs.
 
-## 🏗️ Architecture Overview
+## Architecture Overview
 
 ```text
 ┌─────────────────────────────────────────────────────────────────────────┐
@@ -37,7 +37,7 @@ The `solver-state` crate provides a plugin-based state management service that a
                  └─────────────────┘ └─────────────────┘
 ```
 
-## 📁 Module Structure
+## Module Structure
 
 ```
 solver-state/
@@ -47,7 +47,7 @@ solver-state/
 └── README.md           # This file
 ```
 
-## 🔑 Key Components
+## Key Components
 
 ### 1. **StateService** (`lib.rs`)
 
@@ -95,7 +95,7 @@ All storage operations go through the service's unified API:
 - Atomic updates: atomic_update
 - Management: list_keys, cleanup, get_stats
 
-## 🔄 State Management Flow
+## State Management Flow
 
 ```text
 Application → StateService → Active Plugin → StateStore Instance
@@ -114,7 +114,7 @@ Application → StateService → Active Plugin → StateStore Instance
 5. **Operation Routing**: Service routes operations to active store
 6. **Background Tasks**: Periodic cleanup and optimization
 
-## 🔌 Plugin Interface
+## Plugin Interface
 
 State plugins must implement two main traits:
 
@@ -151,7 +151,7 @@ pub trait StateStore: Send + Sync + Debug {
 }
 ```
 
-## 🚀 Usage Example
+## Usage Example
 
 ```rust
 use solver_state::{StateService, StateServiceBuilder};
@@ -206,7 +206,7 @@ let stats = service.get_stats().await?;
 println!("Keys: {}, Size: {} bytes", stats.key_count, stats.total_size_bytes);
 ```
 
-## 🔍 Critical Observations
+## Critical Observations
 
 ### Strengths:
 
@@ -232,7 +232,7 @@ println!("Keys: {}, Size: {} bytes", stats.key_count, stats.total_size_bytes);
 4. **Async Cleanup**: Make cleanup non-blocking
 5. **Plugin Hot Swap**: Support changing plugins without data loss
 
-## 🔗 Dependencies
+## Dependencies
 
 ### Internal Crates:
 
@@ -250,7 +250,7 @@ println!("Keys: {}, Size: {} bytes", stats.key_count, stats.total_size_bytes);
 - `tracing`: Structured logging
 - `dashmap`: Concurrent hashmap (though not used in current implementation)
 
-## 🏃 Runtime Behavior
+## Runtime Behavior
 
 ### Service Lifecycle:
 
@@ -268,7 +268,7 @@ println!("Keys: {}, Size: {} bytes", stats.key_count, stats.total_size_bytes);
 - Exclusive writer for set/delete operations
 - Atomic updates use closure-based approach
 
-## 🐛 Known Issues & Cruft
+## Known Issues & Cruft
 
 1. **Unused Plugin Config**: Plugin configs passed to builder but not used
 2. **No Plugin Initialization**: Plugins can't be initialized with their configs
@@ -277,7 +277,7 @@ println!("Keys: {}, Size: {} bytes", stats.key_count, stats.total_size_bytes);
 5. **Backend Switching Data Loss**: No data migration when switching backends
 6. **DashMap Dependency**: Listed but not used in implementation
 
-## 🔮 Future Improvements
+## Future Improvements
 
 1. **Transaction Support**: Implement multi-key transactions
 2. **Data Migration**: Transfer data when switching backends
@@ -287,7 +287,7 @@ println!("Keys: {}, Size: {} bytes", stats.key_count, stats.total_size_bytes);
 6. **Replication**: Multi-backend replication
 7. **Event Streaming**: Publish state changes
 
-## 📊 Performance Considerations
+## Performance Considerations
 
 - **Lock Contention**: Multiple RwLocks may cause contention
 - **Arc Overhead**: Multiple Arc wrappings add indirection
@@ -295,7 +295,7 @@ println!("Keys: {}, Size: {} bytes", stats.key_count, stats.total_size_bytes);
 - **Serialization Cost**: All data must be serialized to Bytes
 - **No Connection Pooling**: Backend connections not reused
 
-## ⚠️ Security Considerations
+## Security Considerations
 
 - **No Access Control**: Any code can access any key
 - **No Encryption**: Data stored in plain format

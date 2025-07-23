@@ -6,14 +6,16 @@
 //! events including order creation (Open), completion (Finalised), and
 //! updates (OrderPurchased) from specified settler contracts.
 
+use alloy::primitives::{Address as EthAddress, B256 as H256};
+use alloy::providers::{Provider, ProviderBuilder};
+use alloy::rpc::types::{Filter, Log};
 use async_trait::async_trait;
 use bytes::Bytes;
-use ethers::providers::{Http, Middleware, Provider};
-use ethers::types::{Address as EthAddress, Filter, Log, H256};
 use hex;
 use serde::{Deserialize, Serialize};
 use solver_types::plugins::*;
 use solver_types::Event;
+use std::fmt;
 
 use std::collections::HashMap;
 use std::sync::Arc;
@@ -45,13 +47,12 @@ struct MonitorState {
 /// EIP-7683 on-chain discovery plugin implementation.
 ///
 /// Monitors blockchain events from EIP-7683 settler contracts using
-/// ethers-rs for Ethereum RPC communication.
-#[derive(Debug)]
+/// alloy-rs for Ethereum RPC communication.
 pub struct Eip7683OnchainDiscoveryPlugin {
 	/// Plugin configuration
 	config: Eip7683OnchainConfig,
 	/// Ethereum RPC provider
-	provider: Option<Arc<Provider<Http>>>,
+	provider: Option<Box<dyn Provider>>,
 	/// Plugin performance metrics
 	metrics: PluginMetrics,
 	/// Whether plugin is initialized
@@ -67,6 +68,21 @@ pub struct Eip7683OnchainDiscoveryPlugin {
 
 	/// Active event filters
 	active_filters: Arc<RwLock<Vec<EventFilter>>>,
+}
+
+impl fmt::Debug for Eip7683OnchainDiscoveryPlugin {
+	fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+		f.debug_struct("Eip7683OnchainDiscoveryPlugin")
+			.field("config", &self.config)
+			.field("provider", &"<Provider>")
+			.field("metrics", &self.metrics)
+			.field("is_initialized", &self.is_initialized)
+			.field("is_monitoring", &self.is_monitoring)
+			.field("state", &self.state)
+			.field("stop_tx", &self.stop_tx.is_some())
+			.field("active_filters", &"<Filters>")
+			.finish()
+	}
 }
 
 /// Configuration for EIP-7683 on-chain discovery.
@@ -166,28 +182,31 @@ impl Eip7683OnchainDiscoveryPlugin {
 	/// Establishes connection to the blockchain and verifies chain ID.
 	async fn setup_provider(&mut self) -> PluginResult<()> {
 		debug!(
-			"Setting up ethers provider for EIP-7683 discovery on chain {}",
+			"Setting up alloy provider for EIP-7683 discovery on chain {}",
 			self.config.chain_id
 		);
 
-		let provider = Provider::<Http>::try_from(&self.config.rpc_url)
-			.map_err(|e| PluginError::InitializationFailed(format!("Invalid RPC URL: {}", e)))?
-			.interval(Duration::from_millis(self.config.poll_interval_ms));
+		let provider = ProviderBuilder::new()
+			.with_gas_estimation()
+			.with_simple_nonce_management()
+			.with_chain_id(self.config.chain_id)
+			.connect_http(self.config.rpc_url.parse().map_err(|e| {
+				PluginError::InitializationFailed(format!("Invalid RPC URL: {}", e))
+			})?);
 
 		// Verify chain ID
-		let chain_id = provider.get_chainid().await.map_err(|e| {
+		let chain_id = provider.get_chain_id().await.map_err(|e| {
 			PluginError::InitializationFailed(format!("Failed to get chain ID: {}", e))
 		})?;
 
-		if chain_id.as_u64() != self.config.chain_id {
+		if chain_id != self.config.chain_id {
 			return Err(PluginError::InitializationFailed(format!(
 				"Chain ID mismatch: expected {}, got {}",
-				self.config.chain_id,
-				chain_id.as_u64()
+				self.config.chain_id, chain_id
 			)));
 		}
 
-		self.provider = Some(Arc::new(provider));
+		self.provider = Some(Box::new(provider));
 		Ok(())
 	}
 
@@ -226,19 +245,19 @@ impl Eip7683OnchainDiscoveryPlugin {
 		let mut signatures = Vec::new();
 
 		if config.monitor_open {
-			signatures.push(H256::from_slice(&ethers::utils::keccak256(
+			signatures.push(H256::from(alloy::primitives::keccak256(
 				OPEN_EVENT_SIGNATURE.as_bytes(),
 			)));
 		}
 
 		if config.monitor_finalised {
-			signatures.push(H256::from_slice(&ethers::utils::keccak256(
+			signatures.push(H256::from(alloy::primitives::keccak256(
 				FINALISED_EVENT_SIGNATURE.as_bytes(),
 			)));
 		}
 
 		if config.monitor_order_purchased {
-			signatures.push(H256::from_slice(&ethers::utils::keccak256(
+			signatures.push(H256::from(alloy::primitives::keccak256(
 				ORDER_PURCHASED_EVENT_SIGNATURE.as_bytes(),
 			)));
 		}
@@ -266,7 +285,7 @@ impl Eip7683OnchainDiscoveryPlugin {
 
 		if !signatures.is_empty() {
 			// Set topic0 to any of our event signatures
-			filter = filter.topic0(signatures);
+			filter = filter.event_signature(signatures);
 		}
 
 		if let Some(from) = from_block {
@@ -289,14 +308,15 @@ impl Eip7683OnchainDiscoveryPlugin {
 		log: &Log,
 	) -> PluginResult<Option<DiscoveryEvent>> {
 		// Determine event type from topic0
-		let event_type = if !log.topics.is_empty() {
-			let topic0 = log.topics[0];
-			let open_hash =
-				H256::from_slice(&ethers::utils::keccak256(OPEN_EVENT_SIGNATURE.as_bytes()));
-			let finalised_hash = H256::from_slice(&ethers::utils::keccak256(
+		let event_type = if !log.topics().is_empty() {
+			let topic0 = log.topics()[0];
+			let open_hash = H256::from(alloy::primitives::keccak256(
+				OPEN_EVENT_SIGNATURE.as_bytes(),
+			));
+			let finalised_hash = H256::from(alloy::primitives::keccak256(
 				FINALISED_EVENT_SIGNATURE.as_bytes(),
 			));
-			let order_purchased_hash = H256::from_slice(&ethers::utils::keccak256(
+			let order_purchased_hash = H256::from(alloy::primitives::keccak256(
 				ORDER_PURCHASED_EVENT_SIGNATURE.as_bytes(),
 			));
 
@@ -314,8 +334,8 @@ impl Eip7683OnchainDiscoveryPlugin {
 		};
 
 		// Extract order ID from topics[1] (orderId is indexed in all events)
-		let order_id = if log.topics.len() > 1 {
-			format!("0x{}", hex::encode(log.topics[1].as_bytes()))
+		let order_id = if log.topics().len() > 1 {
+			format!("0x{}", hex::encode(log.topics()[1]))
 		} else {
 			format!(
 				"{:?}_{}",
@@ -328,11 +348,11 @@ impl Eip7683OnchainDiscoveryPlugin {
 		// For other events, we need to decode the data or use transaction context
 		let user = if matches!(event_type, EventType::OrderCreated) {
 			// User address is the first field in ResolvedCrossChainOrder struct
-			if log.data.len() >= 32 {
+			if log.data().data.len() >= 32 {
 				// Skip the first 32 bytes (offset to struct) and get the user address
 				let user_offset = 32; // Offset to the user field in the struct
-				if log.data.len() >= user_offset + 32 {
-					let user_bytes = &log.data[user_offset..user_offset + 32];
+				if log.data().data.len() >= user_offset + 32 {
+					let user_bytes = &log.data().data[user_offset..user_offset + 32];
 					// Address is in the last 20 bytes of the 32-byte word
 					let addr_bytes = &user_bytes[12..32];
 					Some(format!("0x{}", hex::encode(addr_bytes)))
@@ -350,14 +370,17 @@ impl Eip7683OnchainDiscoveryPlugin {
 		let parsed_data = ParsedEventData {
 			order_id: Some(order_id.clone()),
 			user,
-			contract_address: Some(format!("{:?}", log.address)),
+			contract_address: Some(format!("{:?}", log.address())),
 			method_signature: Some(match event_type {
 				EventType::OrderCreated => OPEN_EVENT_SIGNATURE.to_string(),
 				EventType::OrderFilled => FINALISED_EVENT_SIGNATURE.to_string(),
 				EventType::OrderUpdated => ORDER_PURCHASED_EVENT_SIGNATURE.to_string(),
 				_ => "unknown".to_string(),
 			}),
-			decoded_params: Self::decode_event_params(&Bytes::from(log.data.to_vec()), &event_type),
+			decoded_params: Self::decode_event_params(
+				&Bytes::from(log.data().data.clone()),
+				&event_type,
+			),
 		};
 
 		// Calculate processing delay
@@ -367,7 +390,7 @@ impl Eip7683OnchainDiscoveryPlugin {
 			.as_secs();
 		let processing_delay = log.block_number.map(|bn| {
 			// Estimate block timestamp (rough calculation)
-			let estimated_block_time = bn.as_u64() * 12; // 12 seconds per block
+			let estimated_block_time = bn * 12; // 12 seconds per block
 			(now - estimated_block_time) * 1000 // Convert to milliseconds
 		});
 
@@ -376,22 +399,24 @@ impl Eip7683OnchainDiscoveryPlugin {
 			event_type,
 			source: "eip7683_onchain".to_string(),
 			chain_id: config.chain_id,
-			block_number: log.block_number.map(|bn| bn.as_u64()),
+			block_number: log.block_number,
 			transaction_hash: log.transaction_hash.map(|tx| format!("{:?}", tx)),
 			timestamp: now,
-			raw_data: Bytes::from(log.data.to_vec()),
+			raw_data: Bytes::from(log.data().data.clone()),
 			parsed_data: Some(parsed_data),
 			metadata: EventMetadata {
 				source_specific: {
 					let mut meta = HashMap::new();
-					meta.insert("contract_address".to_string(), format!("{:?}", log.address));
+					meta.insert(
+						"contract_address".to_string(),
+						format!("{:?}", log.address()),
+					);
 					meta.insert(
 						"log_index".to_string(),
 						log.log_index.unwrap_or_default().to_string(),
 					);
-					if let Some(removed) = log.removed {
-						meta.insert("removed".to_string(), removed.to_string());
-					}
+					let removed = log.removed;
+					meta.insert("removed".to_string(), removed.to_string());
 					meta
 				},
 				confidence_score: 0.95, // High confidence for on-chain events
@@ -434,7 +459,9 @@ impl Eip7683OnchainDiscoveryPlugin {
 					if data.len() >= 96 {
 						// Origin chain ID is at offset 32 (after user address)
 						let origin_chain_bytes = &data[32..64];
-						let origin_chain = ethers::types::U256::from_big_endian(origin_chain_bytes);
+						let origin_chain = alloy::primitives::U256::from_be_bytes(
+							origin_chain_bytes.try_into().unwrap_or([0u8; 32]),
+						);
 						params.insert(
 							"origin_chain_id".to_string(),
 							EventParam::Uint256(origin_chain.to_string()),
@@ -515,7 +542,7 @@ impl Eip7683OnchainDiscoveryPlugin {
 	/// Polls for new blocks and processes events, handling errors
 	/// and maintaining synchronization state.
 	async fn monitor_blocks_task(
-		provider: Arc<Provider<Http>>,
+		provider: &dyn Provider,
 		config: Eip7683OnchainConfig,
 		sink: EventSink<Event>,
 		mut stop_rx: mpsc::UnboundedReceiver<()>,
@@ -527,13 +554,9 @@ impl Eip7683OnchainDiscoveryPlugin {
 		let mut last_processed_block = if let Some(start) = config.historical_start_block {
 			start
 		} else {
-			provider
-				.get_block_number()
-				.await
-				.map_err(|e| {
-					PluginError::ExecutionFailed(format!("Failed to get latest block: {}", e))
-				})?
-				.as_u64()
+			provider.get_block_number().await.map_err(|e| {
+				PluginError::ExecutionFailed(format!("Failed to get latest block: {}", e))
+			})?
 		};
 
 		debug!(
@@ -545,7 +568,7 @@ impl Eip7683OnchainDiscoveryPlugin {
 			tokio::select! {
 				_ = poll_interval.tick() => {
 					match Self::process_new_blocks(
-						&provider,
+							provider,
 						&config,
 						&sink,
 						&mut last_processed_block,
@@ -578,20 +601,16 @@ impl Eip7683OnchainDiscoveryPlugin {
 	/// Queries blockchain for logs in the specified block range and
 	/// converts discovered events into the solver's event format.
 	async fn process_new_blocks(
-		provider: &Provider<Http>,
+		provider: &dyn Provider,
 		config: &Eip7683OnchainConfig,
 		sink: &EventSink<Event>,
 		last_processed_block: &mut u64,
 		state: &MonitorState,
 	) -> PluginResult<u64> {
 		// Get latest block
-		let latest_block = provider
-			.get_block_number()
-			.await
-			.map_err(|e| {
-				PluginError::ExecutionFailed(format!("Failed to get latest block: {}", e))
-			})?
-			.as_u64();
+		let latest_block = provider.get_block_number().await.map_err(|e| {
+			PluginError::ExecutionFailed(format!("Failed to get latest block: {}", e))
+		})?;
 
 		// Update target block
 		{
@@ -674,7 +693,7 @@ impl BasePlugin for Eip7683OnchainDiscoveryPlugin {
 	}
 
 	fn description(&self) -> &'static str {
-		"Discovers EIP-7683 order events from on-chain sources using ethers-rs"
+		"Discovers EIP-7683 order events from on-chain sources using alloy-rs"
 	}
 
 	async fn initialize(&mut self, config: PluginConfig) -> PluginResult<()> {
@@ -948,7 +967,7 @@ impl DiscoveryPlugin for Eip7683OnchainDiscoveryPlugin {
 		self.stop_tx = Some(stop_tx);
 
 		// Clone necessary data for the monitoring task
-		let provider = self.provider.as_ref().unwrap().clone();
+		let provider = self.provider.take().unwrap();
 		let config = self.config.clone();
 		let current_block = self.state.current_block.clone();
 		let target_block = self.state.target_block.clone();
@@ -959,7 +978,7 @@ impl DiscoveryPlugin for Eip7683OnchainDiscoveryPlugin {
 		// Start monitoring task
 		tokio::spawn(async move {
 			if let Err(e) = Self::monitor_blocks_task(
-				provider,
+				&*provider,
 				config,
 				sink,
 				stop_rx,
@@ -1160,12 +1179,13 @@ mod tests {
 		assert_eq!(signatures.len(), 3); // All three event types enabled by default
 
 		// Verify the signatures match expected values
-		let expected_open =
-			H256::from_slice(&ethers::utils::keccak256(OPEN_EVENT_SIGNATURE.as_bytes()));
-		let expected_finalised = H256::from_slice(&ethers::utils::keccak256(
+		let expected_open = H256::from(alloy::primitives::keccak256(
+			OPEN_EVENT_SIGNATURE.as_bytes(),
+		));
+		let expected_finalised = H256::from(alloy::primitives::keccak256(
 			FINALISED_EVENT_SIGNATURE.as_bytes(),
 		));
-		let expected_purchased = H256::from_slice(&ethers::utils::keccak256(
+		let expected_purchased = H256::from(alloy::primitives::keccak256(
 			ORDER_PURCHASED_EVENT_SIGNATURE.as_bytes(),
 		));
 

@@ -1,28 +1,26 @@
-//! # Ethers.rs-based EVM Delivery Plugin
+//! # Alloy-based EVM Delivery Plugin
 //!
-//! Provides transaction delivery for EVM-compatible blockchains using ethers.rs.
+//! Provides transaction delivery for EVM-compatible blockchains using Alloy.
 //!
 //! This plugin implements transaction submission, monitoring, and management for
-//! Ethereum and EVM-compatible chains using the ethers.rs library. It supports
+//! Ethereum and EVM-compatible chains using the Alloy library. It supports
 //! features like EIP-1559, nonce management, gas price optimization, and
 //! transaction status tracking.
 
+use alloy::network::{Ethereum, EthereumWallet, TransactionBuilder};
+use alloy::primitives::{Address, FixedBytes, U256};
+use alloy::providers::{Provider, ProviderBuilder};
+use alloy::rpc::types::{TransactionReceipt, TransactionRequest};
+use alloy::signers::local::PrivateKeySigner;
 use async_trait::async_trait;
 use dashmap::DashMap;
-use ethers::prelude::*;
-use ethers::providers::{Http, Middleware, Provider};
-use ethers::signers::{LocalWallet, Signer};
-use ethers::types::{
-	Address as EthAddress, Bytes as EthBytes, TransactionReceipt as EthTransactionReceipt,
-	TransactionRequest, H256, U256, U64,
-};
 use serde::{Deserialize, Serialize};
 use solver_types::plugins::*;
 use std::any::Any;
 use std::collections::HashMap;
+use std::fmt;
 use std::sync::Arc;
-use std::time::{Duration, SystemTime, UNIX_EPOCH};
-use tokio::sync::Mutex;
+use std::time::{SystemTime, UNIX_EPOCH};
 use tracing::{debug, error, info, warn};
 
 /// Utility function to truncate hashes for display purposes.
@@ -34,42 +32,47 @@ fn truncate_hash(hash: &str) -> String {
 	}
 }
 
-// Type aliases to resolve naming conflicts between ethers and solver types
+// Type aliases to resolve naming conflicts between alloy and solver types
 type SolverTransaction = solver_types::plugins::Transaction;
 type SolverTxHash = String;
 type SolverTransactionReceipt = solver_types::plugins::TransactionReceipt;
 
-/// EVM delivery plugin implementation using ethers.rs library.
+/// EVM delivery plugin implementation using Alloy library.
 ///
 /// Manages transaction submission and monitoring for EVM-compatible blockchains
 /// with support for advanced features like gas price management, nonce tracking,
 /// retry logic, and transaction replacement strategies.
-#[derive(Debug)]
-pub struct EvmEthersDeliveryPlugin {
+pub struct EvmAlloyDeliveryPlugin {
 	/// Plugin configuration parameters
-	config: EvmEthersConfig,
-	/// Ethers provider for RPC communication
-	provider: Option<Arc<Provider<Http>>>,
-	/// Local wallet for transaction signing
-	wallet: Option<Arc<LocalWallet>>,
-	/// Client middleware combining provider and wallet
-	client: Option<Arc<SignerMiddleware<Provider<Http>, LocalWallet>>>,
+	config: EvmAlloyConfig,
+	/// Alloy provider with transaction filling capabilities
+	provider: Option<Box<dyn Provider<Ethereum>>>,
 	/// Performance metrics tracking
 	metrics: PluginMetrics,
 	/// Initialization status flag
 	is_initialized: bool,
 	/// Cache of pending transactions being monitored
 	pending_transactions: Arc<DashMap<SolverTxHash, PendingTransaction>>,
-	/// Nonce management for sequential transaction ordering
-	nonce_manager: Arc<Mutex<Option<U256>>>,
 }
 
-/// Configuration for the EVM Ethers delivery plugin.
+impl fmt::Debug for EvmAlloyDeliveryPlugin {
+	fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+		f.debug_struct("EvmAlloyDeliveryPlugin")
+			.field("config", &self.config)
+			.field("is_initialized", &self.is_initialized)
+			.field("provider", &"<Provider>")
+			.field("metrics", &self.metrics)
+			.field("pending_transactions", &self.pending_transactions.len())
+			.finish()
+	}
+}
+
+/// Configuration for the EVM Alloy delivery plugin.
 ///
 /// Defines connection parameters, transaction settings, and operational
 /// preferences for interacting with EVM-compatible blockchains.
 #[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct EvmEthersConfig {
+pub struct EvmAlloyConfig {
 	/// Target blockchain network ID
 	pub chain_id: ChainId,
 	/// JSON-RPC endpoint URL
@@ -103,167 +106,153 @@ struct PendingTransaction {
 	/// Unix timestamp when the transaction was submitted
 	pub submitted_at: Timestamp,
 	/// Current delivery status of the transaction
-	pub status: DeliveryStatus,
-	/// Transaction nonce if managed internally
-	pub nonce: Option<U256>,
+	pub _status: DeliveryStatus,
 }
 
-impl Default for EvmEthersDeliveryPlugin {
+impl Default for EvmAlloyDeliveryPlugin {
 	fn default() -> Self {
 		Self::new()
 	}
 }
 
-impl EvmEthersDeliveryPlugin {
-	/// Create a new EVM Ethers delivery plugin with default configuration.
+impl EvmAlloyDeliveryPlugin {
+	/// Create a new EVM Alloy delivery plugin with default configuration.
 	pub fn new() -> Self {
 		Self {
-			config: EvmEthersConfig::default(),
+			config: EvmAlloyConfig::default(),
 			provider: None,
-			wallet: None,
-			client: None,
 			metrics: PluginMetrics::new(),
 			is_initialized: false,
 			pending_transactions: Arc::new(DashMap::new()),
-			nonce_manager: Arc::new(Mutex::new(None)),
 		}
 	}
 
-	/// Create a new EVM Ethers delivery plugin with custom configuration.
+	/// Create a new EVM Alloy delivery plugin with custom configuration.
 	///
 	/// # Arguments
 	/// * `config` - Configuration parameters for the plugin
-	pub fn with_config(config: EvmEthersConfig) -> Self {
+	pub fn with_config(config: EvmAlloyConfig) -> Self {
 		Self {
 			config,
 			provider: None,
-			wallet: None,
-			client: None,
 			metrics: PluginMetrics::new(),
 			is_initialized: false,
 			pending_transactions: Arc::new(DashMap::new()),
-			nonce_manager: Arc::new(Mutex::new(None)),
 		}
 	}
 
 	async fn setup_provider(&mut self) -> PluginResult<()> {
 		debug!(
-			"Setting up ethers provider for chain {}",
+			"Setting up alloy provider for chain {}",
 			self.config.chain_id
 		);
 
-		let provider = Provider::<Http>::try_from(&self.config.rpc_url)
-			.map_err(|e| PluginError::InitializationFailed(format!("Invalid RPC URL: {}", e)))?
-			.interval(Duration::from_millis(self.config.timeout_ms));
-
-		// Verify chain ID matches
-		let chain_id = provider.get_chainid().await.map_err(|e| {
-			PluginError::InitializationFailed(format!("Failed to get chain ID: {}", e))
-		})?;
-
-		if chain_id.as_u64() != self.config.chain_id {
-			return Err(PluginError::InitializationFailed(format!(
-				"Chain ID mismatch: expected {}, got {}",
-				self.config.chain_id,
-				chain_id.as_u64()
-			)));
-		}
-
-		self.provider = Some(Arc::new(provider));
-		Ok(())
-	}
-
-	async fn setup_wallet(&mut self) -> PluginResult<()> {
 		if self.config.private_key.is_empty() {
 			return Err(PluginError::InvalidConfiguration(
 				"Private key is required for delivery".to_string(),
 			));
 		}
 
-		let wallet = self
+		// Parse private key and create wallet
+		let signer = self
 			.config
 			.private_key
-			.parse::<LocalWallet>()
-			.map_err(|e| PluginError::InvalidConfiguration(format!("Invalid private key: {}", e)))?
-			.with_chain_id(self.config.chain_id);
+			.parse::<PrivateKeySigner>()
+			.map_err(|e| {
+				PluginError::InvalidConfiguration(format!("Invalid private key: {}", e))
+			})?;
 
-		debug!("Wallet configured for address: {}", wallet.address());
+		debug!("Wallet configured for address: {}", signer.address());
+		let wallet = EthereumWallet::from(signer);
 
-		let provider = self
-			.provider
-			.as_ref()
-			.ok_or_else(|| {
-				PluginError::InitializationFailed("Provider not initialized".to_string())
-			})?
-			.clone();
+		// Build provider with all necessary layers
+		let provider = ProviderBuilder::new()
+			.with_gas_estimation()
+			.with_simple_nonce_management()
+			.with_chain_id(self.config.chain_id)
+			.wallet(wallet)
+			.connect_http(self.config.rpc_url.parse().map_err(|e| {
+				PluginError::InvalidConfiguration(format!("Invalid RPC URL: {}", e))
+			})?);
 
-		// Create signer middleware
-		let client = SignerMiddleware::new((*provider).clone(), wallet.clone());
+		// Verify chain ID matches
+		let chain_id = provider.get_chain_id().await.map_err(|e| {
+			PluginError::InitializationFailed(format!("Failed to get chain ID: {}", e))
+		})?;
 
-		self.wallet = Some(Arc::new(wallet));
-		self.client = Some(Arc::new(client));
+		if chain_id != self.config.chain_id {
+			return Err(PluginError::InitializationFailed(format!(
+				"Chain ID mismatch: expected {}, got {}",
+				self.config.chain_id, chain_id
+			)));
+		}
 
+		self.provider = Some(Box::new(provider));
 		Ok(())
 	}
 
-	// Convert solver transaction to ethers transaction request
-	fn solver_tx_to_ethers_request(
+	// Convert solver transaction to alloy transaction request
+	fn solver_tx_to_alloy_request(
 		&self,
 		transaction: &SolverTransaction,
 	) -> PluginResult<TransactionRequest> {
-		let to_address: EthAddress = transaction
+		let to_address: Address = transaction
 			.to
 			.parse()
 			.map_err(|e| PluginError::ExecutionFailed(format!("Invalid to address: {}", e)))?;
 
-		let tx_request = TransactionRequest::new()
-			.to(to_address)
-			.value(U256::from(transaction.value))
-			.data(EthBytes::from(transaction.data.clone()));
+		debug!(
+			"Building transaction request to: {:?}, value: {}, data_len: {}",
+			to_address,
+			transaction.value,
+			transaction.data.len()
+		);
+
+		let mut tx_request = TransactionRequest::default()
+			.with_to(to_address)
+			.with_value(U256::from(transaction.value))
+			.with_input(transaction.data.clone());
+
+		// Set chain ID
+		tx_request = tx_request.with_chain_id(self.config.chain_id);
 
 		Ok(tx_request)
 	}
 
-	// Convert ethers receipt to solver receipt
-	fn ethers_receipt_to_solver_receipt(
+	// Convert alloy receipt to solver receipt
+	fn alloy_receipt_to_solver_receipt(
 		&self,
-		eth_receipt: &EthTransactionReceipt,
+		alloy_receipt: &TransactionReceipt,
 	) -> SolverTransactionReceipt {
+		// In Alloy, TransactionReceipt has a status() method that returns bool
+		let status = alloy_receipt.status();
+
 		SolverTransactionReceipt {
-			block_number: eth_receipt.block_number.unwrap_or_default().as_u64(),
-			block_hash: format!("{:?}", eth_receipt.block_hash.unwrap_or_default()),
-			transaction_index: eth_receipt.transaction_index.as_u32(),
-			gas_used: eth_receipt.gas_used.unwrap_or_default().as_u64(),
-			effective_gas_price: eth_receipt.effective_gas_price.unwrap_or_default().as_u64(),
-			status: eth_receipt.status.unwrap_or_default() == U64::from(1),
-			logs: eth_receipt
-				.logs
-				.iter()
-				.map(|log| solver_types::plugins::TransactionLog {
-					address: format!("{:?}", log.address),
-					topics: log.topics.iter().map(|t| format!("{:?}", t)).collect(),
-					data: bytes::Bytes::from(log.data.to_vec()),
-				})
-				.collect(),
+			block_number: alloy_receipt.block_number.unwrap_or(0),
+			block_hash: format!("{:?}", alloy_receipt.block_hash.unwrap_or_default()),
+			transaction_index: alloy_receipt.transaction_index.unwrap_or(0) as u32,
+			gas_used: alloy_receipt.gas_used,
+			effective_gas_price: alloy_receipt.effective_gas_price,
+			status,
+			logs: vec![],
 		}
 	}
 
 	async fn estimate_gas(&self, transaction: &SolverTransaction) -> PluginResult<U256> {
-		let client = self
-			.client
+		let provider = self
+			.provider
 			.as_ref()
-			.ok_or_else(|| PluginError::ExecutionFailed("Client not initialized".to_string()))?;
+			.ok_or_else(|| PluginError::ExecutionFailed("Provider not initialized".to_string()))?;
 
-		let tx_request = self.solver_tx_to_ethers_request(transaction)?;
+		let tx_request = self.solver_tx_to_alloy_request(transaction)?;
 
-		let typed_tx: ethers::types::transaction::eip2718::TypedTransaction = tx_request.into();
-		let gas_estimate = client
-			.estimate_gas(&typed_tx, None)
+		let gas_estimate = provider
+			.estimate_gas(tx_request)
 			.await
 			.map_err(|e| PluginError::ExecutionFailed(format!("Gas estimation failed: {}", e)))?;
 
 		// Add 10% buffer to gas estimate
-		let gas_with_buffer: U256 = gas_estimate * 110 / 100;
+		let gas_with_buffer = U256::from(gas_estimate) * U256::from(110) / U256::from(100);
 
 		// Cap at transaction gas limit if provided
 		let final_gas = if transaction.gas_limit > 0 {
@@ -291,15 +280,17 @@ impl EvmEthersDeliveryPlugin {
 			.map_err(|e| PluginError::ExecutionFailed(format!("Failed to get gas price: {}", e)))?;
 
 		// Apply multiplier
-		let adjusted_price = (gas_price.as_u64() as f64 * self.config.gas_price_multiplier) as u64;
-		let final_price = U256::from(adjusted_price);
+		// Convert gas_price (u128) to u64 safely
+		let gas_price_u64 = gas_price.min(u128::from(u64::MAX)) as u64;
+		let adjusted_price =
+			U256::from((gas_price_u64 as f64 * self.config.gas_price_multiplier) as u64);
 
 		// Apply max gas price limit
 		if let Some(max_price) = self.config.max_gas_price {
-			return Ok(final_price.min(U256::from(max_price)));
+			return Ok(adjusted_price.min(U256::from(max_price)));
 		}
 
-		Ok(final_price)
+		Ok(adjusted_price)
 	}
 
 	async fn get_fee_data(&self) -> PluginResult<(U256, U256)> {
@@ -310,17 +301,19 @@ impl EvmEthersDeliveryPlugin {
 
 		if self.config.enable_eip1559 {
 			// Try to get EIP-1559 fee data
-			match provider.estimate_eip1559_fees(None).await {
-				Ok((max_fee, max_priority_fee)) => {
+			match provider.estimate_eip1559_fees().await {
+				Ok(fees) => {
+					// Convert fees (u128) to u64 safely
+					let max_fee_u64 = fees.max_fee_per_gas.min(u128::from(u64::MAX)) as u64;
+					let priority_fee_u64 =
+						fees.max_priority_fee_per_gas.min(u128::from(u64::MAX)) as u64;
 					let adjusted_max_fee =
-						(max_fee.as_u64() as f64 * self.config.gas_price_multiplier) as u64;
-					let adjusted_priority_fee = (max_priority_fee.as_u64() as f64
-						* self.config.gas_price_multiplier) as u64;
+						U256::from((max_fee_u64 as f64 * self.config.gas_price_multiplier) as u64);
+					let adjusted_priority_fee = U256::from(
+						(priority_fee_u64 as f64 * self.config.gas_price_multiplier) as u64,
+					);
 
-					return Ok((
-						U256::from(adjusted_max_fee),
-						U256::from(adjusted_priority_fee),
-					));
+					return Ok((adjusted_max_fee, adjusted_priority_fee));
 				}
 				Err(e) => {
 					warn!("Failed to get EIP-1559 fees, falling back to legacy: {}", e);
@@ -330,48 +323,7 @@ impl EvmEthersDeliveryPlugin {
 
 		// Fallback to legacy gas price
 		let gas_price = self.get_gas_price().await?;
-		Ok((gas_price, U256::zero()))
-	}
-
-	async fn get_next_nonce(&self) -> PluginResult<U256> {
-		if !self.config.nonce_management {
-			return Err(PluginError::ExecutionFailed(
-				"Nonce management is disabled".to_string(),
-			));
-		}
-
-		let wallet = self
-			.wallet
-			.as_ref()
-			.ok_or_else(|| PluginError::ExecutionFailed("Wallet not initialized".to_string()))?;
-
-		let provider = self
-			.provider
-			.as_ref()
-			.ok_or_else(|| PluginError::ExecutionFailed("Provider not initialized".to_string()))?;
-
-		let mut nonce_manager = self.nonce_manager.lock().await;
-
-		match nonce_manager.as_ref() {
-			Some(current_nonce) => {
-				// Use cached nonce + 1
-				let next_nonce = *current_nonce + 1;
-				*nonce_manager = Some(next_nonce);
-				Ok(next_nonce)
-			}
-			None => {
-				// Get nonce from network
-				let network_nonce = provider
-					.get_transaction_count(wallet.address(), None)
-					.await
-					.map_err(|e| {
-						PluginError::ExecutionFailed(format!("Failed to get nonce: {}", e))
-					})?;
-
-				*nonce_manager = Some(network_nonce);
-				Ok(network_nonce)
-			}
-		}
+		Ok((gas_price, U256::ZERO))
 	}
 
 	async fn send_transaction_internal(
@@ -379,48 +331,66 @@ impl EvmEthersDeliveryPlugin {
 		transaction: &SolverTransaction,
 		nonce: Option<U256>,
 	) -> PluginResult<SolverTxHash> {
-		let client = self
-			.client
+		let provider = self
+			.provider
 			.as_ref()
-			.ok_or_else(|| PluginError::ExecutionFailed("Client not initialized".to_string()))?;
+			.ok_or_else(|| PluginError::ExecutionFailed("Provider not initialized".to_string()))?;
 
-		let mut tx_request = self.solver_tx_to_ethers_request(transaction)?;
+		let mut tx_request = self.solver_tx_to_alloy_request(transaction)?;
 
-		// Set nonce if provided
+		// Set nonce if explicitly provided
 		if let Some(nonce) = nonce {
-			tx_request = tx_request.nonce(nonce);
+			tx_request = tx_request.with_nonce(nonce.to::<u64>());
+			debug!("Set explicit nonce: {}", nonce);
 		}
 
-		// Set gas limit
+		// Set gas limit if specified, otherwise let the provider estimate
 		if transaction.gas_limit > 0 {
-			tx_request = tx_request.gas(U256::from(transaction.gas_limit));
+			tx_request = tx_request.with_gas_limit(transaction.gas_limit);
+			debug!("Set gas limit: {}", transaction.gas_limit);
 		} else {
+			// Estimate gas if not provided
 			let estimated_gas = self.estimate_gas(transaction).await?;
-			tx_request = tx_request.gas(estimated_gas);
+			tx_request = tx_request.with_gas_limit(estimated_gas.to::<u64>());
+			debug!("Using estimated gas: {}", estimated_gas);
 		}
 
-		// Set gas pricing based on EIP-1559 support
-		if self.config.enable_eip1559 {
+		// Set gas pricing if custom values are provided
+		if let Some(gas_price) = transaction.gas_price {
+			tx_request = tx_request.with_gas_price(gas_price.into());
+			debug!("Set gas price: {}", gas_price);
+		} else if let (Some(max_fee), Some(priority_fee)) = (
+			transaction.max_fee_per_gas,
+			transaction.max_priority_fee_per_gas,
+		) {
+			tx_request = tx_request
+				.with_max_fee_per_gas(max_fee.into())
+				.with_max_priority_fee_per_gas(priority_fee.into());
+			debug!(
+				"Set EIP-1559 fees - max: {}, priority: {}",
+				max_fee, priority_fee
+			);
+		} else if self.config.enable_eip1559 {
+			// Let the provider handle EIP-1559 pricing with our custom multipliers
 			let (max_fee, max_priority_fee) = self.get_fee_data().await?;
-
-			if max_priority_fee > U256::zero() {
-				// EIP-1559 transaction
-				tx_request = tx_request.gas_price(max_fee); // For compatibility, some providers use gas_price for max_fee
-			} else {
-				tx_request = tx_request.gas_price(max_fee);
+			if max_priority_fee > U256::ZERO {
+				tx_request = tx_request
+					.with_max_fee_per_gas(max_fee.to::<u128>())
+					.with_max_priority_fee_per_gas(max_priority_fee.to::<u128>());
+				debug!(
+					"Set calculated EIP-1559 fees - max: {}, priority: {}",
+					max_fee, max_priority_fee
+				);
 			}
-		} else {
-			let gas_price = self.get_gas_price().await?;
-			tx_request = tx_request.gas_price(gas_price);
 		}
 
-		// Send transaction
-		let pending_tx = client
-			.send_transaction(tx_request, None)
-			.await
-			.map_err(|e| {
-				PluginError::ExecutionFailed(format!("Transaction submission failed: {}", e))
-			})?;
+		debug!("Sending transaction with request: {:?}", tx_request);
+
+		// Send transaction using provider which handles filling and signing
+		let pending_tx = provider.send_transaction(tx_request).await.map_err(|e| {
+			error!("Transaction submission failed: {:?}", e);
+			PluginError::ExecutionFailed(format!("Transaction submission failed: {}", e))
+		})?;
 
 		let tx_hash = format!("{:?}", pending_tx.tx_hash());
 
@@ -434,13 +404,13 @@ impl EvmEthersDeliveryPlugin {
 	async fn get_transaction_receipt_internal(
 		&self,
 		tx_hash: &SolverTxHash,
-	) -> PluginResult<Option<EthTransactionReceipt>> {
+	) -> PluginResult<Option<TransactionReceipt>> {
 		let provider = self
 			.provider
 			.as_ref()
 			.ok_or_else(|| PluginError::ExecutionFailed("Provider not initialized".to_string()))?;
 
-		let hash: H256 = tx_hash
+		let hash: FixedBytes<32> = tx_hash
 			.parse()
 			.map_err(|e| PluginError::ExecutionFailed(format!("Invalid tx hash: {}", e)))?;
 
@@ -507,7 +477,7 @@ impl EvmEthersDeliveryPlugin {
 	}
 }
 
-impl Default for EvmEthersConfig {
+impl Default for EvmAlloyConfig {
 	fn default() -> Self {
 		Self {
 			chain_id: 1, // Ethereum mainnet
@@ -526,16 +496,13 @@ impl Default for EvmEthersConfig {
 }
 
 #[async_trait]
-impl BasePlugin for EvmEthersDeliveryPlugin {
+impl BasePlugin for EvmAlloyDeliveryPlugin {
 	fn plugin_type(&self) -> &'static str {
-		"evm_ethers_delivery"
+		"evm_alloy_delivery"
 	}
 
 	fn name(&self) -> String {
-		format!(
-			"EVM Ethers Delivery Plugin (Chain {})",
-			self.config.chain_id
-		)
+		format!("EVM Alloy Delivery Plugin (Chain {})", self.config.chain_id)
 	}
 
 	fn version(&self) -> &'static str {
@@ -543,11 +510,11 @@ impl BasePlugin for EvmEthersDeliveryPlugin {
 	}
 
 	fn description(&self) -> &'static str {
-		"Transaction delivery plugin using ethers-rs for EVM chains"
+		"Transaction delivery plugin using Alloy for EVM chains"
 	}
 
 	async fn initialize(&mut self, config: PluginConfig) -> PluginResult<()> {
-		debug!("Initializing EVM Ethers delivery plugin");
+		debug!("Initializing EVM Alloy delivery plugin");
 		// Parse configuration
 		if let Some(chain_id) = config.get_number("chain_id") {
 			self.config.chain_id = chain_id as ChainId;
@@ -595,9 +562,8 @@ impl BasePlugin for EvmEthersDeliveryPlugin {
 			self.config.max_pending_transactions = max_pending as usize;
 		}
 
-		// Setup provider and wallet
+		// Setup provider with wallet
 		self.setup_provider().await?;
-		self.setup_wallet().await?;
 
 		self.is_initialized = true;
 		Ok(())
@@ -646,32 +612,16 @@ impl BasePlugin for EvmEthersDeliveryPlugin {
 			None => return Ok(PluginHealth::unhealthy("Provider not configured")),
 		};
 
-		let wallet = match &self.wallet {
-			Some(wallet) => wallet,
-			None => return Ok(PluginHealth::unhealthy("Wallet not configured")),
-		};
-
 		// Test RPC connection
 		match provider.get_block_number().await {
 			Ok(block_number) => {
-				// Test wallet balance
-				match provider.get_balance(wallet.address(), None).await {
-					Ok(balance) => {
-						let pending_count = self.pending_transactions.len();
+				let pending_count = self.pending_transactions.len();
 
-						Ok(PluginHealth::healthy("EVM delivery plugin is operational")
-							.with_detail("chain_id", self.config.chain_id.to_string())
-							.with_detail("block_number", block_number.to_string())
-							.with_detail("wallet_address", format!("{:?}", wallet.address()))
-							.with_detail("wallet_balance", balance.to_string())
-							.with_detail("pending_transactions", pending_count.to_string())
-							.with_detail("eip1559_enabled", self.config.enable_eip1559.to_string()))
-					}
-					Err(e) => Ok(PluginHealth::unhealthy(format!(
-						"Cannot get wallet balance: {}",
-						e
-					))),
-				}
+				Ok(PluginHealth::healthy("EVM delivery plugin is operational")
+					.with_detail("chain_id", self.config.chain_id.to_string())
+					.with_detail("block_number", block_number.to_string())
+					.with_detail("pending_transactions", pending_count.to_string())
+					.with_detail("eip1559_enabled", self.config.enable_eip1559.to_string()))
 			}
 			Err(e) => Ok(PluginHealth::unhealthy(format!(
 				"RPC connection failed: {}",
@@ -695,7 +645,7 @@ impl BasePlugin for EvmEthersDeliveryPlugin {
 		if let Ok(gas_price) = self.get_gas_price().await {
 			metrics.set_gauge(
 				"current_gas_price_gwei",
-				gas_price.as_u64() as f64 / 1_000_000_000.0,
+				gas_price.to::<u64>() as f64 / 1_000_000_000.0,
 			);
 		}
 
@@ -703,17 +653,15 @@ impl BasePlugin for EvmEthersDeliveryPlugin {
 	}
 
 	async fn shutdown(&mut self) -> PluginResult<()> {
-		info!("Shutting down EVM Ethers delivery plugin");
+		info!("Shutting down EVM Alloy delivery plugin");
 
 		self.is_initialized = false;
 		self.provider = None;
-		self.wallet = None;
-		self.client = None;
 
 		// Clear pending transactions
 		self.pending_transactions.clear();
 
-		info!("EVM Ethers delivery plugin shutdown complete");
+		info!("EVM Alloy delivery plugin shutdown complete");
 		Ok(())
 	}
 
@@ -786,7 +734,7 @@ impl BasePlugin for EvmEthersDeliveryPlugin {
 }
 
 #[async_trait]
-impl DeliveryPlugin for EvmEthersDeliveryPlugin {
+impl DeliveryPlugin for EvmAlloyDeliveryPlugin {
 	fn chain_id(&self) -> ChainId {
 		self.config.chain_id
 	}
@@ -815,14 +763,14 @@ impl DeliveryPlugin for EvmEthersDeliveryPlugin {
 					let (max_fee_opt, priority_fee_opt) =
 						self.calculate_priority_fees(&request.priority);
 					(
-						max_fee_opt.unwrap_or_default(),
-						priority_fee_opt.unwrap_or_default(),
+						max_fee_opt.unwrap_or(U256::ZERO),
+						priority_fee_opt.unwrap_or(U256::ZERO),
 					)
 				}
 			};
 			(calculated_max_fee, calculated_priority_fee)
 		} else {
-			(self.get_gas_price().await?, U256::zero())
+			(self.get_gas_price().await?, U256::ZERO)
 		};
 
 		let estimated_cost = gas_limit * max_fee;
@@ -845,13 +793,16 @@ impl DeliveryPlugin for EvmEthersDeliveryPlugin {
 
 		let mut recommendations = vec![
 			format!("Gas limit: {} units", gas_limit),
-			format!("Max fee per gas: {} gwei", max_fee.as_u64() / 1_000_000_000),
+			format!(
+				"Max fee per gas: {} gwei",
+				max_fee.to::<u64>() / 1_000_000_000
+			),
 		];
 
-		if self.config.enable_eip1559 && priority_fee > U256::zero() {
+		if self.config.enable_eip1559 && priority_fee > U256::ZERO {
 			recommendations.push(format!(
 				"Priority fee: {} gwei",
-				priority_fee.as_u64() / 1_000_000_000
+				priority_fee.to::<u64>() / 1_000_000_000
 			));
 			recommendations.push("Using EIP-1559 type 2 transaction".to_string());
 		} else {
@@ -859,9 +810,9 @@ impl DeliveryPlugin for EvmEthersDeliveryPlugin {
 		}
 
 		Ok(DeliveryEstimate {
-			gas_limit: gas_limit.as_u64(),
-			gas_price: max_fee.as_u64(),
-			estimated_cost: estimated_cost.as_u64(),
+			gas_limit: gas_limit.to::<u64>(),
+			gas_price: max_fee.to::<u64>(),
+			estimated_cost: estimated_cost.to::<u64>(),
 			estimated_time,
 			confidence_score: 0.9, // High confidence for direct RPC delivery
 			recommendations,
@@ -884,12 +835,8 @@ impl DeliveryPlugin for EvmEthersDeliveryPlugin {
 			.unwrap()
 			.as_secs();
 
-		// Get nonce if nonce management is enabled
-		let nonce = if self.config.nonce_management && request.transaction.nonce.is_none() {
-			Some(self.get_next_nonce().await?)
-		} else {
-			request.transaction.nonce.map(U256::from)
-		};
+		// Use provided nonce if available
+		let nonce = request.transaction.nonce.map(U256::from);
 
 		// Send transaction
 		let tx_hash = self
@@ -899,8 +846,7 @@ impl DeliveryPlugin for EvmEthersDeliveryPlugin {
 		// Track pending transaction
 		let pending = PendingTransaction {
 			submitted_at: now,
-			status: DeliveryStatus::Submitted,
-			nonce,
+			_status: DeliveryStatus::Submitted,
 		};
 
 		self.pending_transactions.insert(tx_hash.clone(), pending);
@@ -930,15 +876,14 @@ impl DeliveryPlugin for EvmEthersDeliveryPlugin {
 		&self,
 		tx_hash: &String,
 	) -> PluginResult<Option<DeliveryResponse>> {
-		let eth_receipt = self.get_transaction_receipt_internal(tx_hash).await?;
+		let alloy_receipt = self.get_transaction_receipt_internal(tx_hash).await?;
 
 		if let Some(pending) = self.pending_transactions.get(tx_hash) {
-			let (status, receipt, cost) = if let Some(eth_receipt) = eth_receipt {
-				let plugin_receipt = self.ethers_receipt_to_solver_receipt(&eth_receipt);
-				let gas_used = eth_receipt.gas_used.unwrap_or_default().as_u64();
-				let effective_gas_price =
-					eth_receipt.effective_gas_price.unwrap_or_default().as_u64();
-				let total_cost = gas_used * effective_gas_price;
+			let (status, receipt, cost) = if let Some(alloy_receipt) = alloy_receipt {
+				let plugin_receipt = self.alloy_receipt_to_solver_receipt(&alloy_receipt);
+				let gas_used = alloy_receipt.gas_used;
+				let effective_gas_price = alloy_receipt.effective_gas_price;
+				let total_cost = gas_used as u128 * effective_gas_price;
 
 				let mut fee_breakdown = HashMap::new();
 				fee_breakdown.insert("gas_fee".to_string(), total_cost);
@@ -983,128 +928,20 @@ impl DeliveryPlugin for EvmEthersDeliveryPlugin {
 		Ok(None)
 	}
 
-	async fn cancel_transaction(&self, tx_hash: &String) -> PluginResult<bool> {
-		// Check if transaction is still pending
-		if let Some(_eth_receipt) = self.get_transaction_receipt_internal(tx_hash).await? {
-			return Ok(false); // Already confirmed, cannot cancel
-		}
-
-		if let Some(pending) = self.pending_transactions.get(tx_hash) {
-			if let Some(nonce) = pending.nonce {
-				let wallet = self.wallet.as_ref().unwrap();
-
-				// Create a cancel transaction (send 0 ETH to self with higher gas)
-				let cancel_tx = SolverTransaction {
-					to: format!("{:?}", wallet.address()),
-					value: 0,
-					data: bytes::Bytes::new(),
-					gas_limit: 21000,
-					gas_price: None,
-					max_fee_per_gas: None,
-					max_priority_fee_per_gas: None,
-					nonce: Some(nonce.as_u64()),
-					chain_id: self.config.chain_id,
-				};
-
-				// Send with higher gas price
-				match self
-					.send_transaction_internal(&cancel_tx, Some(nonce))
-					.await
-				{
-					Ok(_) => {
-						// Mark original as cancelled
-						if let Some(mut pending_ref) = self.pending_transactions.get_mut(tx_hash) {
-							pending_ref.status = DeliveryStatus::Dropped;
-						}
-						info!(
-							"Successfully submitted cancellation transaction for {}",
-							tx_hash
-						);
-						return Ok(true);
-					}
-					Err(e) => {
-						error!("Failed to submit cancellation transaction: {}", e);
-						return Ok(false);
-					}
-				}
-			}
-		}
-
-		Ok(false)
+	async fn cancel_transaction(&self, _tx_hash: &String) -> PluginResult<bool> {
+		unimplemented!("Cancelling a transaction not supported for this plugin")
 	}
 
 	async fn replace_transaction(
 		&self,
-		original_tx_hash: &String,
-		new_request: DeliveryRequest,
+		_original_tx_hash: &String,
+		_new_request: DeliveryRequest,
 	) -> PluginResult<DeliveryResponse> {
-		// Get original transaction details
-		let original = self
-			.pending_transactions
-			.get(original_tx_hash)
-			.ok_or_else(|| PluginError::NotFound("Original transaction not found".to_string()))?;
-
-		let original_nonce = original.nonce.ok_or_else(|| {
-			PluginError::ExecutionFailed("Original transaction has no nonce".to_string())
-		})?;
-
-		drop(original); // Release the reference
-
-		// Create replacement transaction with same nonce
-		let mut replacement_tx = new_request.transaction.clone();
-		replacement_tx.nonce = Some(original_nonce.as_u64());
-
-		// Send replacement transaction
-		let response_hash = self
-			.send_transaction_internal(&replacement_tx, Some(original_nonce))
-			.await?;
-
-		// Mark original as replaced
-		if let Some(mut original_pending) = self.pending_transactions.get_mut(original_tx_hash) {
-			original_pending.status = DeliveryStatus::Replaced;
-		}
-
-		// Track new transaction
-		let now = SystemTime::now()
-			.duration_since(UNIX_EPOCH)
-			.unwrap()
-			.as_secs();
-
-		let pending = PendingTransaction {
-			submitted_at: now,
-			status: DeliveryStatus::Submitted,
-			nonce: Some(original_nonce),
-		};
-
-		self.pending_transactions
-			.insert(response_hash.clone(), pending);
-
-		info!(
-			"Successfully replaced transaction {} with {}",
-			original_tx_hash, response_hash
-		);
-
-		Ok(DeliveryResponse {
-			tx_hash: response_hash,
-			chain_id: self.config.chain_id,
-			submitted_at: now,
-			status: DeliveryStatus::Submitted,
-			receipt: None,
-			cost: DeliveryCost {
-				gas_used: 0,
-				gas_price: 0,
-				total_cost: 0,
-				fee_breakdown: HashMap::new(),
-			},
-		})
+		unimplemented!("Replacing a transaction not supported for this plugin")
 	}
 
 	fn supported_features(&self) -> Vec<DeliveryFeature> {
-		let mut features = vec![
-			DeliveryFeature::GasEstimation,
-			DeliveryFeature::Cancellation,
-			DeliveryFeature::Replacement,
-		];
+		let mut features = vec![DeliveryFeature::GasEstimation];
 
 		if self.config.nonce_management {
 			features.push(DeliveryFeature::NonceManagement);
@@ -1123,21 +960,17 @@ impl DeliveryPlugin for EvmEthersDeliveryPlugin {
 			.as_ref()
 			.ok_or_else(|| PluginError::ExecutionFailed("Provider not initialized".to_string()))?;
 
-		let block_number = provider
-			.get_block_number()
-			.await
-			.map_err(|e| {
-				PluginError::ExecutionFailed(format!("Failed to get block number: {}", e))
-			})?
-			.as_u64();
+		let block_number = provider.get_block_number().await.map_err(|e| {
+			PluginError::ExecutionFailed(format!("Failed to get block number: {}", e))
+		})?;
 
-		let gas_price = self.get_gas_price().await?.as_u64();
+		let gas_price = self.get_gas_price().await?.to::<u64>();
 
 		let (base_fee, priority_fee) = if self.config.enable_eip1559 {
 			match self.get_fee_data().await {
 				Ok((max_fee, max_priority)) => (
-					Some(max_fee.saturating_sub(max_priority).as_u64()),
-					Some(max_priority.as_u64()),
+					Some(max_fee.saturating_sub(max_priority).to::<u64>()),
+					Some(max_priority.to::<u64>()),
 				),
 				Err(_) => (None, None),
 			}
@@ -1210,7 +1043,7 @@ mod tests {
 
 	#[tokio::test]
 	async fn test_plugin_initialization() {
-		let mut plugin = EvmEthersDeliveryPlugin::new();
+		let mut plugin = EvmAlloyDeliveryPlugin::new();
 		let config = create_test_config();
 
 		// Validate config first
@@ -1232,7 +1065,7 @@ mod tests {
 
 	#[tokio::test]
 	async fn test_can_deliver() {
-		let mut plugin = EvmEthersDeliveryPlugin::new();
+		let mut plugin = EvmAlloyDeliveryPlugin::new();
 
 		// Before initialization, should not be able to deliver
 		let request = create_test_delivery_request();
@@ -1249,7 +1082,7 @@ mod tests {
 
 	#[tokio::test]
 	async fn test_priority_fee_calculation() {
-		let plugin = EvmEthersDeliveryPlugin::new();
+		let plugin = EvmAlloyDeliveryPlugin::new();
 
 		let (max_fee, priority_fee) = plugin.calculate_priority_fees(&DeliveryPriority::Low);
 		assert!(max_fee.is_some());
@@ -1263,10 +1096,10 @@ mod tests {
 
 	#[tokio::test]
 	async fn test_transaction_conversion() {
-		let plugin = EvmEthersDeliveryPlugin::new();
+		let plugin = EvmAlloyDeliveryPlugin::new();
 		let transaction = create_test_transaction();
 
-		let result = plugin.solver_tx_to_ethers_request(&transaction);
+		let result = plugin.solver_tx_to_alloy_request(&transaction);
 		assert!(result.is_ok());
 	}
 }
