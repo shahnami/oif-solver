@@ -116,37 +116,37 @@ Comprehensive error types for all failure scenarios:
 - `Serialization`: Data format errors
 - `Shutdown`: Cleanup failures
 
-## 🔄 Event Flow
+## 🔄 Event Processing Flow
 
 ```
-Discovery Plugin → OrderCreated Event → Orchestrator
+Discovery Plugin → EventSink → Orchestrator Event Loop
                                            │
-                                           ▼
-                                    Process Order
+                                           ▼ (Sequential Processing)
+                                    match event.type:
                                            │
-                                           ▼
-                                    Delivery Service
-                                           │
-                                           ▼
-                                    Fill Event (Pending)
-                                           │
-                                           ▼
-                                    Monitor Fill Status
-                                           │
-                                           ▼
-                                    Fill Confirmed
-                                           │
-                                           ▼
-                                    Settlement Service
-                                    (Monitor Conditions)
-                                           │
-                                           ▼
-                                    SettlementReadyEvent
-                                           │
-                                           ▼
-                                    Delivery Service
-                                    (Execute Settlement)
+                              ┌────────────┼────────────┐
+                              ▼            ▼            ▼
+                        Discovery     OrderCreated   Fill/Settlement
+                         Event           Event          Events
+                              │            │              │
+                              ▼            ▼              ▼
+                       Store Event → Process Order → Monitor Status
+                                           │              │
+                                           ▼              ▼
+                                    Delivery       Settlement
+                                    Service        Service
 ```
+
+**Processing Characteristics:**
+- **Sequential Event Processing**: Events processed one at a time in order
+- **Blocking Event Handling**: Each event fully processed before next
+- **Concurrent Background Tasks**: Health monitoring, fill monitoring run in parallel
+- **In-memory**: No event persistence or durability
+
+**Concurrency Model:**
+- **Event Loop**: Single-threaded sequential processing of events
+- **Background Tasks**: Health monitoring (30s interval), fill monitoring (5s interval)
+- **Plugin Tasks**: Discovery and settlement plugins may spawn additional background tasks
 
 ### Event Types Handled:
 

@@ -72,12 +72,12 @@ sequenceDiagram
 
 ```mermaid
 sequenceDiagram
-    participant Event as Event Bus
+    participant Channel as Event Channel
     participant Core as Core Engine
     participant State as State Manager
     participant Plugin as Plugin Factory
 
-    Event->>Core: Intent Event
+    Channel->>Core: Intent Event (mpsc)
     Core->>Plugin: Get Required Plugins
     Plugin-->>Core: Plugin Instances
 
@@ -85,10 +85,10 @@ sequenceDiagram
     Core->>Core: Execute Workflow
 
     alt Success
-        Core->>Event: Workflow Complete
+        Core->>Core: Process Next Event
     else Error
         Core->>State: Mark Failed
-        Core->>Event: Error Event
+        Core->>Core: Log Error & Continue
     end
 ```
 
