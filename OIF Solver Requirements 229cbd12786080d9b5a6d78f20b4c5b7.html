@@ -1,0 +1,688 @@
+<html><head><meta http-equiv="Content-Type" content="text/html; charset=utf-8"/><title>OIF Solver Requirements</title><style>
+/* cspell:disable-file */
+/* webkit printing magic: print all background colors */
+html {
+	-webkit-print-color-adjust: exact;
+}
+* {
+	box-sizing: border-box;
+	-webkit-print-color-adjust: exact;
+}
+
+html,
+body {
+	margin: 0;
+	padding: 0;
+}
+@media only screen {
+	body {
+		margin: 2em auto;
+		max-width: 900px;
+		color: rgb(55, 53, 47);
+	}
+}
+
+body {
+	line-height: 1.5;
+	white-space: pre-wrap;
+}
+
+a,
+a.visited {
+	color: inherit;
+	text-decoration: underline;
+}
+
+.pdf-relative-link-path {
+	font-size: 80%;
+	color: #444;
+}
+
+h1,
+h2,
+h3 {
+	letter-spacing: -0.01em;
+	line-height: 1.2;
+	font-weight: 600;
+	margin-bottom: 0;
+}
+
+.page-title {
+	font-size: 2.5rem;
+	font-weight: 700;
+	margin-top: 0;
+	margin-bottom: 0.75em;
+}
+
+h1 {
+	font-size: 1.875rem;
+	margin-top: 1.875rem;
+}
+
+h2 {
+	font-size: 1.5rem;
+	margin-top: 1.5rem;
+}
+
+h3 {
+	font-size: 1.25rem;
+	margin-top: 1.25rem;
+}
+
+.source {
+	border: 1px solid #ddd;
+	border-radius: 3px;
+	padding: 1.5em;
+	word-break: break-all;
+}
+
+.callout {
+	border-radius: 3px;
+	padding: 1rem;
+}
+
+figure {
+	margin: 1.25em 0;
+	page-break-inside: avoid;
+}
+
+figcaption {
+	opacity: 0.5;
+	font-size: 85%;
+	margin-top: 0.5em;
+}
+
+mark {
+	background-color: transparent;
+}
+
+.indented {
+	padding-left: 1.5em;
+}
+
+hr {
+	background: transparent;
+	display: block;
+	width: 100%;
+	height: 1px;
+	visibility: visible;
+	border: none;
+	border-bottom: 1px solid rgba(55, 53, 47, 0.09);
+}
+
+img {
+	max-width: 100%;
+}
+
+@media only print {
+	img {
+		max-height: 100vh;
+		object-fit: contain;
+	}
+}
+
+@page {
+	margin: 1in;
+}
+
+.collection-content {
+	font-size: 0.875rem;
+}
+
+.column-list {
+	display: flex;
+	justify-content: space-between;
+}
+
+.column {
+	padding: 0 1em;
+}
+
+.column:first-child {
+	padding-left: 0;
+}
+
+.column:last-child {
+	padding-right: 0;
+}
+
+.table_of_contents-item {
+	display: block;
+	font-size: 0.875rem;
+	line-height: 1.3;
+	padding: 0.125rem;
+}
+
+.table_of_contents-indent-1 {
+	margin-left: 1.5rem;
+}
+
+.table_of_contents-indent-2 {
+	margin-left: 3rem;
+}
+
+.table_of_contents-indent-3 {
+	margin-left: 4.5rem;
+}
+
+.table_of_contents-link {
+	text-decoration: none;
+	opacity: 0.7;
+	border-bottom: 1px solid rgba(55, 53, 47, 0.18);
+}
+
+table,
+th,
+td {
+	border: 1px solid rgba(55, 53, 47, 0.09);
+	border-collapse: collapse;
+}
+
+table {
+	border-left: none;
+	border-right: none;
+}
+
+th,
+td {
+	font-weight: normal;
+	padding: 0.25em 0.5em;
+	line-height: 1.5;
+	min-height: 1.5em;
+	text-align: left;
+}
+
+th {
+	color: rgba(55, 53, 47, 0.6);
+}
+
+ol,
+ul {
+	margin: 0;
+	margin-block-start: 0.6em;
+	margin-block-end: 0.6em;
+}
+
+li > ol:first-child,
+li > ul:first-child {
+	margin-block-start: 0.6em;
+}
+
+ul > li {
+	list-style: disc;
+}
+
+ul.to-do-list {
+	padding-inline-start: 0;
+}
+
+ul.to-do-list > li {
+	list-style: none;
+}
+
+.to-do-children-checked {
+	text-decoration: line-through;
+	opacity: 0.375;
+}
+
+ul.toggle > li {
+	list-style: none;
+}
+
+ul {
+	padding-inline-start: 1.7em;
+}
+
+ul > li {
+	padding-left: 0.1em;
+}
+
+ol {
+	padding-inline-start: 1.6em;
+}
+
+ol > li {
+	padding-left: 0.2em;
+}
+
+.mono ol {
+	padding-inline-start: 2em;
+}
+
+.mono ol > li {
+	text-indent: -0.4em;
+}
+
+.toggle {
+	padding-inline-start: 0em;
+	list-style-type: none;
+}
+
+/* Indent toggle children */
+.toggle > li > details {
+	padding-left: 1.7em;
+}
+
+.toggle > li > details > summary {
+	margin-left: -1.1em;
+}
+
+.selected-value {
+	display: inline-block;
+	padding: 0 0.5em;
+	background: rgba(206, 205, 202, 0.5);
+	border-radius: 3px;
+	margin-right: 0.5em;
+	margin-top: 0.3em;
+	margin-bottom: 0.3em;
+	white-space: nowrap;
+}
+
+.collection-title {
+	display: inline-block;
+	margin-right: 1em;
+}
+
+.page-description {
+	margin-bottom: 2em;
+}
+
+.simple-table {
+	margin-top: 1em;
+	font-size: 0.875rem;
+	empty-cells: show;
+}
+.simple-table td {
+	height: 29px;
+	min-width: 120px;
+}
+
+.simple-table th {
+	height: 29px;
+	min-width: 120px;
+}
+
+.simple-table-header-color {
+	background: rgb(247, 246, 243);
+	color: black;
+}
+.simple-table-header {
+	font-weight: 500;
+}
+
+time {
+	opacity: 0.5;
+}
+
+.icon {
+	display: inline-block;
+	max-width: 1.2em;
+	max-height: 1.2em;
+	text-decoration: none;
+	vertical-align: text-bottom;
+	margin-right: 0.5em;
+}
+
+img.icon {
+	border-radius: 3px;
+}
+
+.user-icon {
+	width: 1.5em;
+	height: 1.5em;
+	border-radius: 100%;
+	margin-right: 0.5rem;
+}
+
+.user-icon-inner {
+	font-size: 0.8em;
+}
+
+.text-icon {
+	border: 1px solid #000;
+	text-align: center;
+}
+
+.page-cover-image {
+	display: block;
+	object-fit: cover;
+	width: 100%;
+	max-height: 30vh;
+}
+
+.page-header-icon {
+	font-size: 3rem;
+	margin-bottom: 1rem;
+}
+
+.page-header-icon-with-cover {
+	margin-top: -0.72em;
+	margin-left: 0.07em;
+}
+
+.page-header-icon img {
+	border-radius: 3px;
+}
+
+.link-to-page {
+	margin: 1em 0;
+	padding: 0;
+	border: none;
+	font-weight: 500;
+}
+
+p > .user {
+	opacity: 0.5;
+}
+
+td > .user,
+td > time {
+	white-space: nowrap;
+}
+
+input[type="checkbox"] {
+	transform: scale(1.5);
+	margin-right: 0.6em;
+	vertical-align: middle;
+}
+
+p {
+	margin-top: 0.5em;
+	margin-bottom: 0.5em;
+}
+
+.image {
+	border: none;
+	margin: 1.5em 0;
+	padding: 0;
+	border-radius: 0;
+	text-align: center;
+}
+
+.code,
+code {
+	background: rgba(135, 131, 120, 0.15);
+	border-radius: 3px;
+	padding: 0.2em 0.4em;
+	border-radius: 3px;
+	font-size: 85%;
+	tab-size: 2;
+}
+
+code {
+	color: #eb5757;
+}
+
+.code {
+	padding: 1.5em 1em;
+}
+
+.code-wrap {
+	white-space: pre-wrap;
+	word-break: break-all;
+}
+
+.code > code {
+	background: none;
+	padding: 0;
+	font-size: 100%;
+	color: inherit;
+}
+
+blockquote {
+	font-size: 1.25em;
+	margin: 1em 0;
+	padding-left: 1em;
+	border-left: 3px solid rgb(55, 53, 47);
+}
+
+.bookmark {
+	text-decoration: none;
+	max-height: 8em;
+	padding: 0;
+	display: flex;
+	width: 100%;
+	align-items: stretch;
+}
+
+.bookmark-title {
+	font-size: 0.85em;
+	overflow: hidden;
+	text-overflow: ellipsis;
+	height: 1.75em;
+	white-space: nowrap;
+}
+
+.bookmark-text {
+	display: flex;
+	flex-direction: column;
+}
+
+.bookmark-info {
+	flex: 4 1 180px;
+	padding: 12px 14px 14px;
+	display: flex;
+	flex-direction: column;
+	justify-content: space-between;
+}
+
+.bookmark-image {
+	width: 33%;
+	flex: 1 1 180px;
+	display: block;
+	position: relative;
+	object-fit: cover;
+	border-radius: 1px;
+}
+
+.bookmark-description {
+	color: rgba(55, 53, 47, 0.6);
+	font-size: 0.75em;
+	overflow: hidden;
+	max-height: 4.5em;
+	word-break: break-word;
+}
+
+.bookmark-href {
+	font-size: 0.75em;
+	margin-top: 0.25em;
+}
+
+.sans { font-family: ui-sans-serif, -apple-system, BlinkMacSystemFont, "Segoe UI Variable Display", "Segoe UI", Helvetica, "Apple Color Emoji", Arial, sans-serif, "Segoe UI Emoji", "Segoe UI Symbol"; }
+.code { font-family: "SFMono-Regular", Menlo, Consolas, "PT Mono", "Liberation Mono", Courier, monospace; }
+.serif { font-family: Lyon-Text, Georgia, ui-serif, serif; }
+.mono { font-family: iawriter-mono, Nitti, Menlo, Courier, monospace; }
+.pdf .sans { font-family: Inter, ui-sans-serif, -apple-system, BlinkMacSystemFont, "Segoe UI Variable Display", "Segoe UI", Helvetica, "Apple Color Emoji", Arial, sans-serif, "Segoe UI Emoji", "Segoe UI Symbol", 'Twemoji', 'Noto Color Emoji', 'Noto Sans CJK JP'; }
+.pdf:lang(zh-CN) .sans { font-family: Inter, ui-sans-serif, -apple-system, BlinkMacSystemFont, "Segoe UI Variable Display", "Segoe UI", Helvetica, "Apple Color Emoji", Arial, sans-serif, "Segoe UI Emoji", "Segoe UI Symbol", 'Twemoji', 'Noto Color Emoji', 'Noto Sans CJK SC'; }
+.pdf:lang(zh-TW) .sans { font-family: Inter, ui-sans-serif, -apple-system, BlinkMacSystemFont, "Segoe UI Variable Display", "Segoe UI", Helvetica, "Apple Color Emoji", Arial, sans-serif, "Segoe UI Emoji", "Segoe UI Symbol", 'Twemoji', 'Noto Color Emoji', 'Noto Sans CJK TC'; }
+.pdf:lang(ko-KR) .sans { font-family: Inter, ui-sans-serif, -apple-system, BlinkMacSystemFont, "Segoe UI Variable Display", "Segoe UI", Helvetica, "Apple Color Emoji", Arial, sans-serif, "Segoe UI Emoji", "Segoe UI Symbol", 'Twemoji', 'Noto Color Emoji', 'Noto Sans CJK KR'; }
+.pdf .code { font-family: Source Code Pro, "SFMono-Regular", Menlo, Consolas, "PT Mono", "Liberation Mono", Courier, monospace, 'Twemoji', 'Noto Color Emoji', 'Noto Sans Mono CJK JP'; }
+.pdf:lang(zh-CN) .code { font-family: Source Code Pro, "SFMono-Regular", Menlo, Consolas, "PT Mono", "Liberation Mono", Courier, monospace, 'Twemoji', 'Noto Color Emoji', 'Noto Sans Mono CJK SC'; }
+.pdf:lang(zh-TW) .code { font-family: Source Code Pro, "SFMono-Regular", Menlo, Consolas, "PT Mono", "Liberation Mono", Courier, monospace, 'Twemoji', 'Noto Color Emoji', 'Noto Sans Mono CJK TC'; }
+.pdf:lang(ko-KR) .code { font-family: Source Code Pro, "SFMono-Regular", Menlo, Consolas, "PT Mono", "Liberation Mono", Courier, monospace, 'Twemoji', 'Noto Color Emoji', 'Noto Sans Mono CJK KR'; }
+.pdf .serif { font-family: PT Serif, Lyon-Text, Georgia, ui-serif, serif, 'Twemoji', 'Noto Color Emoji', 'Noto Serif CJK JP'; }
+.pdf:lang(zh-CN) .serif { font-family: PT Serif, Lyon-Text, Georgia, ui-serif, serif, 'Twemoji', 'Noto Color Emoji', 'Noto Serif CJK SC'; }
+.pdf:lang(zh-TW) .serif { font-family: PT Serif, Lyon-Text, Georgia, ui-serif, serif, 'Twemoji', 'Noto Color Emoji', 'Noto Serif CJK TC'; }
+.pdf:lang(ko-KR) .serif { font-family: PT Serif, Lyon-Text, Georgia, ui-serif, serif, 'Twemoji', 'Noto Color Emoji', 'Noto Serif CJK KR'; }
+.pdf .mono { font-family: PT Mono, iawriter-mono, Nitti, Menlo, Courier, monospace, 'Twemoji', 'Noto Color Emoji', 'Noto Sans Mono CJK JP'; }
+.pdf:lang(zh-CN) .mono { font-family: PT Mono, iawriter-mono, Nitti, Menlo, Courier, monospace, 'Twemoji', 'Noto Color Emoji', 'Noto Sans Mono CJK SC'; }
+.pdf:lang(zh-TW) .mono { font-family: PT Mono, iawriter-mono, Nitti, Menlo, Courier, monospace, 'Twemoji', 'Noto Color Emoji', 'Noto Sans Mono CJK TC'; }
+.pdf:lang(ko-KR) .mono { font-family: PT Mono, iawriter-mono, Nitti, Menlo, Courier, monospace, 'Twemoji', 'Noto Color Emoji', 'Noto Sans Mono CJK KR'; }
+.highlight-default {
+	color: rgba(50, 48, 44, 1);
+}
+.highlight-gray {
+	color: rgba(115, 114, 110, 1);
+	fill: rgba(115, 114, 110, 1);
+}
+.highlight-brown {
+	color: rgba(159, 107, 83, 1);
+	fill: rgba(159, 107, 83, 1);
+}
+.highlight-orange {
+	color: rgba(217, 115, 13, 1);
+	fill: rgba(217, 115, 13, 1);
+}
+.highlight-yellow {
+	color: rgba(203, 145, 47, 1);
+	fill: rgba(203, 145, 47, 1);
+}
+.highlight-teal {
+	color: rgba(68, 131, 97, 1);
+	fill: rgba(68, 131, 97, 1);
+}
+.highlight-blue {
+	color: rgba(51, 126, 169, 1);
+	fill: rgba(51, 126, 169, 1);
+}
+.highlight-purple {
+	color: rgba(144, 101, 176, 1);
+	fill: rgba(144, 101, 176, 1);
+}
+.highlight-pink {
+	color: rgba(193, 76, 138, 1);
+	fill: rgba(193, 76, 138, 1);
+}
+.highlight-red {
+	color: rgba(205, 60, 58, 1);
+	fill: rgba(205, 60, 58, 1);
+}
+.highlight-default_background {
+	color: rgba(50, 48, 44, 1);
+}
+.highlight-gray_background {
+	background: rgba(248, 248, 247, 1);
+}
+.highlight-brown_background {
+	background: rgba(244, 238, 238, 1);
+}
+.highlight-orange_background {
+	background: rgba(251, 236, 221, 1);
+}
+.highlight-yellow_background {
+	background: rgba(251, 243, 219, 1);
+}
+.highlight-teal_background {
+	background: rgba(237, 243, 236, 1);
+}
+.highlight-blue_background {
+	background: rgba(231, 243, 248, 1);
+}
+.highlight-purple_background {
+	background: rgba(248, 243, 252, 1);
+}
+.highlight-pink_background {
+	background: rgba(252, 241, 246, 1);
+}
+.highlight-red_background {
+	background: rgba(253, 235, 236, 1);
+}
+.block-color-default {
+	color: inherit;
+	fill: inherit;
+}
+.block-color-gray {
+	color: rgba(115, 114, 110, 1);
+	fill: rgba(115, 114, 110, 1);
+}
+.block-color-brown {
+	color: rgba(159, 107, 83, 1);
+	fill: rgba(159, 107, 83, 1);
+}
+.block-color-orange {
+	color: rgba(217, 115, 13, 1);
+	fill: rgba(217, 115, 13, 1);
+}
+.block-color-yellow {
+	color: rgba(203, 145, 47, 1);
+	fill: rgba(203, 145, 47, 1);
+}
+.block-color-teal {
+	color: rgba(68, 131, 97, 1);
+	fill: rgba(68, 131, 97, 1);
+}
+.block-color-blue {
+	color: rgba(51, 126, 169, 1);
+	fill: rgba(51, 126, 169, 1);
+}
+.block-color-purple {
+	color: rgba(144, 101, 176, 1);
+	fill: rgba(144, 101, 176, 1);
+}
+.block-color-pink {
+	color: rgba(193, 76, 138, 1);
+	fill: rgba(193, 76, 138, 1);
+}
+.block-color-red {
+	color: rgba(205, 60, 58, 1);
+	fill: rgba(205, 60, 58, 1);
+}
+.block-color-default_background {
+	color: inherit;
+	fill: inherit;
+}
+.block-color-gray_background {
+	background: rgba(248, 248, 247, 1);
+}
+.block-color-brown_background {
+	background: rgba(244, 238, 238, 1);
+}
+.block-color-orange_background {
+	background: rgba(251, 236, 221, 1);
+}
+.block-color-yellow_background {
+	background: rgba(251, 243, 219, 1);
+}
+.block-color-teal_background {
+	background: rgba(237, 243, 236, 1);
+}
+.block-color-blue_background {
+	background: rgba(231, 243, 248, 1);
+}
+.block-color-purple_background {
+	background: rgba(248, 243, 252, 1);
+}
+.block-color-pink_background {
+	background: rgba(252, 241, 246, 1);
+}
+.block-color-red_background {
+	background: rgba(253, 235, 236, 1);
+}
+.select-value-color-default { background-color: rgba(84, 72, 49, 0.08); }
+.select-value-color-gray { background-color: rgba(84, 72, 49, 0.15); }
+.select-value-color-brown { background-color: rgba(210, 162, 141, 0.35); }
+.select-value-color-orange { background-color: rgba(224, 124, 57, 0.27); }
+.select-value-color-yellow { background-color: rgba(236, 191, 66, 0.39); }
+.select-value-color-green { background-color: rgba(123, 183, 129, 0.27); }
+.select-value-color-blue { background-color: rgba(93, 165, 206, 0.27); }
+.select-value-color-purple { background-color: rgba(168, 129, 197, 0.27); }
+.select-value-color-pink { background-color: rgba(225, 136, 179, 0.27); }
+.select-value-color-red { background-color: rgba(244, 171, 159, 0.4); }
+
+.checkbox {
+	display: inline-flex;
+	vertical-align: text-bottom;
+	width: 16;
+	height: 16;
+	background-size: 16px;
+	margin-left: 2px;
+	margin-right: 5px;
+}
+
+.checkbox-on {
+	background-image: url("data:image/svg+xml;charset=UTF-8,%3Csvg%20width%3D%2216%22%20height%3D%2216%22%20viewBox%3D%220%200%2016%2016%22%20fill%3D%22none%22%20xmlns%3D%22http%3A%2F%2Fwww.w3.org%2F2000%2Fsvg%22%3E%0A%3Crect%20width%3D%2216%22%20height%3D%2216%22%20fill%3D%22%2358A9D7%22%2F%3E%0A%3Cpath%20d%3D%22M6.71429%2012.2852L14%204.9995L12.7143%203.71436L6.71429%209.71378L3.28571%206.2831L2%207.57092L6.71429%2012.2852Z%22%20fill%3D%22white%22%2F%3E%0A%3C%2Fsvg%3E");
+}
+
+.checkbox-off {
+	background-image: url("data:image/svg+xml;charset=UTF-8,%3Csvg%20width%3D%2216%22%20height%3D%2216%22%20viewBox%3D%220%200%2016%2016%22%20fill%3D%22none%22%20xmlns%3D%22http%3A%2F%2Fwww.w3.org%2F2000%2Fsvg%22%3E%0A%3Crect%20x%3D%220.75%22%20y%3D%220.75%22%20width%3D%2214.5%22%20height%3D%2214.5%22%20fill%3D%22white%22%20stroke%3D%22%2336352F%22%20stroke-width%3D%221.5%22%2F%3E%0A%3C%2Fsvg%3E");
+}
+	
+</style></head><body><article id="229cbd12-7860-80d9-b5a6-d78f20b4c5b7" class="page sans"><header><div class="page-header-icon undefined"><img class="icon" src="https://www.notion.so/icons/directional-sign-right_gray.svg"/></div><h1 class="page-title">OIF Solver Requirements</h1><p class="page-description"></p><table class="properties"><tbody><tr class="property-row property-row-person"><th><span class="icon property-icon"><div data-testid="/icons/friends_gray.svg" style="width:14px;height:14px;flex-shrink:0;transform:scale(1.2);mask:url(/icons/friends_gray.svg?mode=light) no-repeat center;-webkit-mask:url(/icons/friends_gray.svg?mode=light) no-repeat center;background-color:rgba(71, 70, 68, 0.6);fill:rgba(71, 70, 68, 0.6)"></div></span>Owner</th><td><span class="user"><img src="OIF%20Solver%20Requirements%20229cbd12786080d9b5a6d78f20b4c5b7/C9B8F3A7-2C30-437A-8B71-31ED01CAB097_1_201_a.jpeg" class="icon user-icon"/>Nami Shah</span></td></tr><tr class="property-row property-row-multi_select"><th><span class="icon property-icon"><div data-testid="/icons/list_gray.svg" style="width:14px;height:14px;flex-shrink:0;transform:scale(1.2);mask:url(/icons/list_gray.svg?mode=light) no-repeat center;-webkit-mask:url(/icons/list_gray.svg?mode=light) no-repeat center;background-color:rgba(71, 70, 68, 0.6);fill:rgba(71, 70, 68, 0.6)"></div></span>Tags</th><td></td></tr><tr class="property-row property-row-last_edited_time"><th><span class="icon property-icon"><div data-testid="/icons/clock_gray.svg" style="width:14px;height:14px;flex-shrink:0;transform:scale(1.2);mask:url(/icons/clock_gray.svg?mode=light) no-repeat center;-webkit-mask:url(/icons/clock_gray.svg?mode=light) no-repeat center;background-color:rgba(71, 70, 68, 0.6);fill:rgba(71, 70, 68, 0.6)"></div></span>Last edited time</th><td><time>@July 14, 2025 4:42 AM</time></td></tr></tbody></table></header><div class="page-body"><nav id="229cbd12-7860-809f-a220-e392c0edba5f" class="block-color-gray table_of_contents"><div class="table_of_contents-item table_of_contents-indent-0"><a class="table_of_contents-link" href="#22ccbd12-7860-809c-b854-ed2fbc44ea47">Project Goals and Context</a></div><div class="table_of_contents-item table_of_contents-indent-1"><a class="table_of_contents-link" href="#22ccbd12-7860-8011-8f89-d26ebaf31e3f">Key Priorities</a></div><div class="table_of_contents-item table_of_contents-indent-0"><a class="table_of_contents-link" href="#22ccbd12-7860-8021-88bc-ff7db6d0b91e">Requirements Summary</a></div><div class="table_of_contents-item table_of_contents-indent-0"><a class="table_of_contents-link" href="#22ccbd12-7860-8097-b2c0-c5110bb7545f">Beta Requirements</a></div><div class="table_of_contents-item table_of_contents-indent-1"><a class="table_of_contents-link" href="#22ccbd12-7860-8037-8627-e307736e762a">Goals</a></div><div class="table_of_contents-item table_of_contents-indent-1"><a class="table_of_contents-link" href="#22ccbd12-7860-8012-9f41-de252b96c3fc">Core Requirements</a></div><div class="table_of_contents-item table_of_contents-indent-1"><a class="table_of_contents-link" href="#22ccbd12-7860-80cc-aa1b-fa182107e740">Key Architectural Decisions</a></div><div class="table_of_contents-item table_of_contents-indent-1"><a class="table_of_contents-link" href="#22ccbd12-7860-80e3-ad73-efeea1189470">Beta Success Criteria</a></div><div class="table_of_contents-item table_of_contents-indent-0"><a class="table_of_contents-link" href="#22ccbd12-7860-80ec-b3de-c21746d16ee2">MVP Requirements</a></div><div class="table_of_contents-item table_of_contents-indent-1"><a class="table_of_contents-link" href="#22ccbd12-7860-80e2-ac75-e75cbc644f01">Goals</a></div><div class="table_of_contents-item table_of_contents-indent-1"><a class="table_of_contents-link" href="#22ccbd12-7860-808f-a7ed-d3049677a915">Enhanced Requirements (Building on Beta)</a></div><div class="table_of_contents-item table_of_contents-indent-1"><a class="table_of_contents-link" href="#22ccbd12-7860-8083-851f-e69539b7a34c">MVP Success Criteria</a></div><div class="table_of_contents-item table_of_contents-indent-0"><a class="table_of_contents-link" href="#22ccbd12-7860-80a0-ba5c-cdc4f398b190">Future Roadmap (Post-MVP)</a></div><div class="table_of_contents-item table_of_contents-indent-1"><a class="table_of_contents-link" href="#22ccbd12-7860-8045-9f9e-f9fdc092d0f2">Q4 2024 - Advanced Features</a></div><div class="table_of_contents-item table_of_contents-indent-1"><a class="table_of_contents-link" href="#22ccbd12-7860-8032-98c2-e83e24a7fc3a">Q1 2025 - Scale &amp; Optimize</a></div></nav><p id="22ccbd12-7860-8016-8fb7-f3736e1bd87f" class="">
+</p><hr id="22ccbd12-7860-8045-87fc-fa8df54bdcca"/><h2 id="22ccbd12-7860-809c-b854-ed2fbc44ea47" class="">Project Goals and Context</h2><p id="22ccbd12-7860-8084-96fa-edccff8fb23c" class="">The primary goal of OIF is to provide an open-source, standards-based solution that allows new L2 chains to implement intent-based bridging without vendor lock-in. The aim is to make adoption as easy as possible for new chains to deploy and use the system.</p><h3 id="22ccbd12-7860-8011-8f89-d26ebaf31e3f" class="">Key Priorities</h3><ol type="1" id="22ccbd12-7860-8092-9a13-c92693577443" class="numbered-list" start="1"><li>Easy onboarding for new L2 chains;</li></ol><ol type="1" id="22ccbd12-7860-8019-a88a-e96101f497f4" class="numbered-list" start="2"><li>Open standards, no vendor lock-in;</li></ol><ol type="1" id="22ccbd12-7860-80b3-8616-ddcf43e97587" class="numbered-list" start="3"><li>Extensible architecture for future order types and chain technologies.</li></ol><p id="22ccbd12-7860-8096-b9fa-e5829b234ebe" class="">
+</p><hr id="22ccbd12-7860-80de-a50b-d8df9d5b7b61"/><h2 id="22ccbd12-7860-8021-88bc-ff7db6d0b91e" class="">Requirements Summary</h2><p id="22ccbd12-7860-80a5-b715-eebdd15bca98" class="">
+</p><div id="22ccbd12-7860-80dc-b350-c88e5e817673" class="collection-content"><h4 class="collection-title">Milestones</h4><table class="collection-content"><thead><tr><th><span class="icon property-icon"><div data-testid="/icons/font_gray.svg" style="width:14px;height:14px;flex-shrink:0;transform:scale(1.2);mask:url(/icons/font_gray.svg?mode=light) no-repeat center;-webkit-mask:url(/icons/font_gray.svg?mode=light) no-repeat center;background-color:rgba(71, 70, 68, 0.6);fill:rgba(71, 70, 68, 0.6)"></div></span>Milestone</th><th><span class="icon property-icon"><div data-testid="/icons/calendar_gray.svg" style="width:14px;height:14px;flex-shrink:0;transform:scale(1.2);mask:url(/icons/calendar_gray.svg?mode=light) no-repeat center;-webkit-mask:url(/icons/calendar_gray.svg?mode=light) no-repeat center;background-color:rgba(71, 70, 68, 0.6);fill:rgba(71, 70, 68, 0.6)"></div></span>Due Date</th><th><span class="icon property-icon"><div data-testid="/icons/description_gray.svg" style="width:14px;height:14px;flex-shrink:0;transform:scale(1.2);mask:url(/icons/description_gray.svg?mode=light) no-repeat center;-webkit-mask:url(/icons/description_gray.svg?mode=light) no-repeat center;background-color:rgba(71, 70, 68, 0.6);fill:rgba(71, 70, 68, 0.6)"></div></span>Objectives</th></tr></thead><tbody><tr id="22ccbd12-7860-80f1-97aa-e21815656d27"><td class="cell-title"><a href="https://www.notion.so/Beta-22ccbd12786080f197aae21815656d27?pvs=21"><img class="icon" src="https://www.notion.so/icons/die1_green.svg"/>Beta</a></td><td class="cell-eltW"><time>@August 31, 2025</time></td><td class="cell-]jre">1. Functional solver that can process basic cross-chain intents<br/>2. Support for ERC-7683 standard orders (primary focus)<br/>3. Basic monitoring and operational tooling<br/>4. Foundation for production blockchain integration<br/></td></tr><tr id="22ccbd12-7860-8067-a583-ee22e2a93c86"><td class="cell-title"><a href="https://www.notion.so/MVP-22ccbd1278608067a583ee22e2a93c86?pvs=21"><img class="icon" src="https://www.notion.so/icons/die2_blue.svg"/>MVP</a></td><td class="cell-eltW"><time>@September 30, 2025</time></td><td class="cell-]jre">1. Production-ready solver with comprehensive order type support<br/>2. Advanced validation and optimization capabilities<br/>3. Complete onboarding solution for new L2 chains<br/>4. Real users can start using the system<br/></td></tr><tr id="22ccbd12-7860-8020-b985-e7947d9b2f44"><td class="cell-title"><a href="https://www.notion.so/Post-MVP-22ccbd1278608020b985e7947d9b2f44?pvs=21"><img class="icon" src="https://www.notion.so/icons/die3_brown.svg"/>Post-MVP</a></td><td class="cell-eltW"></td><td class="cell-]jre"></td></tr></tbody></table><br/><br/></div><div id="22ccbd12-7860-807e-82ed-f30a098ffb13" class="collection-content"><h4 class="collection-title">Effort Legend</h4><table class="collection-content"><thead><tr><th><span class="icon property-icon"><div data-testid="/icons/font_gray.svg" style="width:14px;height:14px;flex-shrink:0;transform:scale(1.2);mask:url(/icons/font_gray.svg?mode=light) no-repeat center;-webkit-mask:url(/icons/font_gray.svg?mode=light) no-repeat center;background-color:rgba(71, 70, 68, 0.6);fill:rgba(71, 70, 68, 0.6)"></div></span>Size</th><th><span class="icon property-icon"><div data-testid="/icons/hashtag_gray.svg" style="width:14px;height:14px;flex-shrink:0;transform:scale(1.2);mask:url(/icons/hashtag_gray.svg?mode=light) no-repeat center;-webkit-mask:url(/icons/hashtag_gray.svg?mode=light) no-repeat center;background-color:rgba(71, 70, 68, 0.6);fill:rgba(71, 70, 68, 0.6)"></div></span>Minimum (md)</th><th><span class="icon property-icon"><div data-testid="/icons/hashtag_gray.svg" style="width:14px;height:14px;flex-shrink:0;transform:scale(1.2);mask:url(/icons/hashtag_gray.svg?mode=light) no-repeat center;-webkit-mask:url(/icons/hashtag_gray.svg?mode=light) no-repeat center;background-color:rgba(71, 70, 68, 0.6);fill:rgba(71, 70, 68, 0.6)"></div></span>Maximum (md)</th></tr></thead><tbody><tr id="22ccbd12-7860-805e-9ba0-c99ebd2f4bc6"><td class="cell-title"><a href="https://www.notion.so/XS-22ccbd127860805e9ba0c99ebd2f4bc6?pvs=21"><img class="icon" src="https://www.notion.so/icons/long-sleeve-shirt_lightgray.svg"/>XS</a></td><td class="cell-&gt;BJZ">1</td><td class="cell-aUaR">2</td></tr><tr id="22ccbd12-7860-8029-ae22-eac61f7ccdfb"><td class="cell-title"><a href="https://www.notion.so/S-22ccbd1278608029ae22eac61f7ccdfb?pvs=21"><img class="icon" src="https://www.notion.so/icons/long-sleeve-shirt_lightgray.svg"/>S</a></td><td class="cell-&gt;BJZ">3</td><td class="cell-aUaR">5</td></tr><tr id="22ccbd12-7860-8059-95ad-c474067d1149"><td class="cell-title"><a href="https://www.notion.so/M-22ccbd127860805995adc474067d1149?pvs=21"><img class="icon" src="https://www.notion.so/icons/long-sleeve-shirt_lightgray.svg"/>M</a></td><td class="cell-&gt;BJZ">5</td><td class="cell-aUaR">10</td></tr><tr id="22ccbd12-7860-8065-a7ad-daa36c66dd25"><td class="cell-title"><a href="https://www.notion.so/L-22ccbd1278608065a7addaa36c66dd25?pvs=21"><img class="icon" src="https://www.notion.so/icons/long-sleeve-shirt_lightgray.svg"/>L</a></td><td class="cell-&gt;BJZ">10</td><td class="cell-aUaR">15</td></tr><tr id="22ccbd12-7860-803d-a00a-ea19f7c8e5a5"><td class="cell-title"><a href="https://www.notion.so/XL-22ccbd127860803da00aea19f7c8e5a5?pvs=21"><img class="icon" src="https://www.notion.so/icons/long-sleeve-shirt_lightgray.svg"/>XL</a></td><td class="cell-&gt;BJZ">15</td><td class="cell-aUaR">20</td></tr></tbody></table><br/><br/></div><div id="229cbd12-7860-816a-b235-e8d1da22418c" class="collection-content"><h4 class="collection-title">Requirements</h4><table class="collection-content"><thead><tr><th><span class="icon property-icon"><div data-testid="/icons/font_gray.svg" style="width:14px;height:14px;flex-shrink:0;transform:scale(1.2);mask:url(/icons/font_gray.svg?mode=light) no-repeat center;-webkit-mask:url(/icons/font_gray.svg?mode=light) no-repeat center;background-color:rgba(71, 70, 68, 0.6);fill:rgba(71, 70, 68, 0.6)"></div></span>Component</th><th><span class="icon property-icon"><div data-testid="/icons/arrow-northeast_gray.svg" style="width:14px;height:14px;flex-shrink:0;transform:scale(1.2);mask:url(/icons/arrow-northeast_gray.svg?mode=light) no-repeat center;-webkit-mask:url(/icons/arrow-northeast_gray.svg?mode=light) no-repeat center;background-color:rgba(71, 70, 68, 0.6);fill:rgba(71, 70, 68, 0.6)"></div></span>Milestone</th><th><span class="icon property-icon"><div data-testid="/icons/arrow-northeast_gray.svg" style="width:14px;height:14px;flex-shrink:0;transform:scale(1.2);mask:url(/icons/arrow-northeast_gray.svg?mode=light) no-repeat center;-webkit-mask:url(/icons/arrow-northeast_gray.svg?mode=light) no-repeat center;background-color:rgba(71, 70, 68, 0.6);fill:rgba(71, 70, 68, 0.6)"></div></span>Size</th><th><span class="icon property-icon"><div data-testid="/icons/search_gray.svg" style="width:14px;height:14px;flex-shrink:0;transform:scale(1.2);mask:url(/icons/search_gray.svg?mode=light) no-repeat center;-webkit-mask:url(/icons/search_gray.svg?mode=light) no-repeat center;background-color:rgba(71, 70, 68, 0.6);fill:rgba(71, 70, 68, 0.6)"></div></span>Effort</th><th><span class="icon property-icon"><div data-testid="/icons/description_gray.svg" style="width:14px;height:14px;flex-shrink:0;transform:scale(1.2);mask:url(/icons/description_gray.svg?mode=light) no-repeat center;-webkit-mask:url(/icons/description_gray.svg?mode=light) no-repeat center;background-color:rgba(71, 70, 68, 0.6);fill:rgba(71, 70, 68, 0.6)"></div></span>Notes</th></tr></thead><tbody><tr id="229cbd12-7860-8182-be22-d82d8f7ba292"><td class="cell-title"><a href="https://www.notion.so/ERC-7683-Order-Support-229cbd1278608182be22d82d8f7ba292?pvs=21"><img class="icon" src="https://www.notion.so/icons/arrow-turn-right_gray.svg"/>ERC-7683 Order Support</a></td><td class="cell-R~w_"><a href="https://www.notion.so/Beta-22ccbd12786080f197aae21815656d27?pvs=21"><img class="icon" src="https://www.notion.so/icons/die1_green.svg"/>Beta</a></td><td class="cell-TJHM"><a href="https://www.notion.so/L-22ccbd1278608065a7addaa36c66dd25?pvs=21"><img class="icon" src="https://www.notion.so/icons/long-sleeve-shirt_lightgray.svg"/>L</a></td><td class="cell-poYG">12.5</td><td class="cell-=~&gt;h">Process standard ERC-7683 intents</td></tr><tr id="22ccbd12-7860-8063-90d1-cd91ef0b29b5"><td class="cell-title"><a href="https://www.notion.so/Cross-chain-Settlement-22ccbd127860806390d1cd91ef0b29b5?pvs=21"><img class="icon" src="https://www.notion.so/icons/arrow-turn-right_gray.svg"/>Cross-chain Settlement</a></td><td class="cell-R~w_"><a href="https://www.notion.so/Beta-22ccbd12786080f197aae21815656d27?pvs=21"><img class="icon" src="https://www.notion.so/icons/die1_green.svg"/>Beta</a></td><td class="cell-TJHM"><a href="https://www.notion.so/L-22ccbd1278608065a7addaa36c66dd25?pvs=21"><img class="icon" src="https://www.notion.so/icons/long-sleeve-shirt_lightgray.svg"/>L</a></td><td class="cell-poYG">12.5</td><td class="cell-=~&gt;h">Using Arbitrum cross-chain broadcaster</td></tr><tr id="22ccbd12-7860-8025-a829-db6fe2300af2"><td class="cell-title"><a href="https://www.notion.so/Event-Monitoring-22ccbd1278608025a829db6fe2300af2?pvs=21"><img class="icon" src="https://www.notion.so/icons/arrow-turn-right_gray.svg"/>Event Monitoring</a></td><td class="cell-R~w_"><a href="https://www.notion.so/Beta-22ccbd12786080f197aae21815656d27?pvs=21"><img class="icon" src="https://www.notion.so/icons/die1_green.svg"/>Beta</a></td><td class="cell-TJHM"><a href="https://www.notion.so/M-22ccbd127860805995adc474067d1149?pvs=21"><img class="icon" src="https://www.notion.so/icons/long-sleeve-shirt_lightgray.svg"/>M</a></td><td class="cell-poYG">7.5</td><td class="cell-=~&gt;h">Real-time updates using e.g. <code>eth_subscribe</code></td></tr><tr id="22ccbd12-7860-800d-9f9b-f50482cf661b"><td class="cell-title"><a href="https://www.notion.so/Order-Validation-22ccbd127860800d9f9bf50482cf661b?pvs=21"><img class="icon" src="https://www.notion.so/icons/arrow-turn-right_gray.svg"/>Order Validation</a></td><td class="cell-R~w_"><a href="https://www.notion.so/Beta-22ccbd12786080f197aae21815656d27?pvs=21"><img class="icon" src="https://www.notion.so/icons/die1_green.svg"/>Beta</a></td><td class="cell-TJHM"><a href="https://www.notion.so/M-22ccbd127860805995adc474067d1149?pvs=21"><img class="icon" src="https://www.notion.so/icons/long-sleeve-shirt_lightgray.svg"/>M</a></td><td class="cell-poYG">7.5</td><td class="cell-=~&gt;h">Validate order feasibility, profitability, etc..</td></tr><tr id="22ccbd12-7860-80ac-b15c-d1a702449ad0"><td class="cell-title"><a href="https://www.notion.so/Basic-Transaction-Execution-22ccbd12786080acb15cd1a702449ad0?pvs=21"><img class="icon" src="https://www.notion.so/icons/arrow-turn-right_gray.svg"/>Basic Transaction Execution</a></td><td class="cell-R~w_"><a href="https://www.notion.so/Beta-22ccbd12786080f197aae21815656d27?pvs=21"><img class="icon" src="https://www.notion.so/icons/die1_green.svg"/>Beta</a></td><td class="cell-TJHM"><a href="https://www.notion.so/M-22ccbd127860805995adc474067d1149?pvs=21"><img class="icon" src="https://www.notion.so/icons/long-sleeve-shirt_lightgray.svg"/>M</a></td><td class="cell-poYG">7.5</td><td class="cell-=~&gt;h">Fulfill orders on destination (using strategy pattern)</td></tr><tr id="22ccbd12-7860-8065-8f36-f485bc421c52"><td class="cell-title"><a href="https://www.notion.so/Persistent-Storage-22ccbd12786080658f36f485bc421c52?pvs=21"><img class="icon" src="https://www.notion.so/icons/arrow-turn-right_gray.svg"/>Persistent Storage</a></td><td class="cell-R~w_"><a href="https://www.notion.so/Beta-22ccbd12786080f197aae21815656d27?pvs=21"><img class="icon" src="https://www.notion.so/icons/die1_green.svg"/>Beta</a></td><td class="cell-TJHM"><a href="https://www.notion.so/S-22ccbd1278608029ae22eac61f7ccdfb?pvs=21"><img class="icon" src="https://www.notion.so/icons/long-sleeve-shirt_lightgray.svg"/>S</a></td><td class="cell-poYG">4</td><td class="cell-=~&gt;h">Orders can restore from last state in case of restarts / crashes</td></tr><tr id="22ccbd12-7860-80f7-a5d2-c3c547c45df5"><td class="cell-title"><a href="https://www.notion.so/Configuration-Module-22ccbd12786080f7a5d2c3c547c45df5?pvs=21"><img class="icon" src="https://www.notion.so/icons/arrow-turn-right_gray.svg"/>Configuration Module</a></td><td class="cell-R~w_"><a href="https://www.notion.so/Beta-22ccbd12786080f197aae21815656d27?pvs=21"><img class="icon" src="https://www.notion.so/icons/die1_green.svg"/>Beta</a></td><td class="cell-TJHM"><a href="https://www.notion.so/S-22ccbd1278608029ae22eac61f7ccdfb?pvs=21"><img class="icon" src="https://www.notion.so/icons/long-sleeve-shirt_lightgray.svg"/>S</a></td><td class="cell-poYG">4</td><td class="cell-=~&gt;h">Allow easy configuration changes</td></tr><tr id="22ccbd12-7860-80f5-9b8d-e70508a98949"><td class="cell-title"><a href="https://www.notion.so/Basic-Monitoring-22ccbd12786080f59b8de70508a98949?pvs=21"><img class="icon" src="https://www.notion.so/icons/arrow-turn-right_gray.svg"/>Basic Monitoring</a></td><td class="cell-R~w_"><a href="https://www.notion.so/Beta-22ccbd12786080f197aae21815656d27?pvs=21"><img class="icon" src="https://www.notion.so/icons/die1_green.svg"/>Beta</a></td><td class="cell-TJHM"><a href="https://www.notion.so/S-22ccbd1278608029ae22eac61f7ccdfb?pvs=21"><img class="icon" src="https://www.notion.so/icons/long-sleeve-shirt_lightgray.svg"/>S</a></td><td class="cell-poYG">4</td><td class="cell-=~&gt;h">For debugging issues</td></tr><tr id="22ccbd12-7860-8013-ae72-c203fbf4c7ae"><td class="cell-title"><a href="https://www.notion.so/CI-CD-Pipeline-22ccbd1278608013ae72c203fbf4c7ae?pvs=21"><img class="icon" src="https://www.notion.so/icons/arrow-turn-right_gray.svg"/>CI/CD Pipeline</a></td><td class="cell-R~w_"><a href="https://www.notion.so/Beta-22ccbd12786080f197aae21815656d27?pvs=21"><img class="icon" src="https://www.notion.so/icons/die1_green.svg"/>Beta</a></td><td class="cell-TJHM"><a href="https://www.notion.so/XS-22ccbd127860805e9ba0c99ebd2f4bc6?pvs=21"><img class="icon" src="https://www.notion.so/icons/long-sleeve-shirt_lightgray.svg"/>XS</a></td><td class="cell-poYG">1.5</td><td class="cell-=~&gt;h">Automated testing</td></tr><tr id="22ccbd12-7860-809e-ad1d-fa42bb1435a9"><td class="cell-title"><a href="https://www.notion.so/Solver-Reservation-System-22ccbd127860809ead1dfa42bb1435a9?pvs=21"><img class="icon" src="https://www.notion.so/icons/arrow-turn-right_gray.svg"/>Solver Reservation System</a></td><td class="cell-R~w_"><a href="https://www.notion.so/MVP-22ccbd1278608067a583ee22e2a93c86?pvs=21"><img class="icon" src="https://www.notion.so/icons/die2_blue.svg"/>MVP</a></td><td class="cell-TJHM"><a href="https://www.notion.so/M-22ccbd127860805995adc474067d1149?pvs=21"><img class="icon" src="https://www.notion.so/icons/long-sleeve-shirt_lightgray.svg"/>M</a></td><td class="cell-poYG">7.5</td><td class="cell-=~&gt;h">Assign orders to specific solvers</td></tr><tr id="22ccbd12-7860-807f-b5e0-e6fb94319b9c"><td class="cell-title"><a href="https://www.notion.so/Multi-Order-Type-Support-22ccbd127860807fb5e0e6fb94319b9c?pvs=21"><img class="icon" src="https://www.notion.so/icons/arrow-turn-right_gray.svg"/>Multi-Order Type Support</a></td><td class="cell-R~w_"><a href="https://www.notion.so/MVP-22ccbd1278608067a583ee22e2a93c86?pvs=21"><img class="icon" src="https://www.notion.so/icons/die2_blue.svg"/>MVP</a></td><td class="cell-TJHM"><a href="https://www.notion.so/M-22ccbd127860805995adc474067d1149?pvs=21"><img class="icon" src="https://www.notion.so/icons/long-sleeve-shirt_lightgray.svg"/>M</a></td><td class="cell-poYG">7.5</td><td class="cell-=~&gt;h">Think about what order types we want to support (bridge, swap, limit, ..) and/or semantically differentiate in Solvers.</td></tr><tr id="22ccbd12-7860-8045-96a4-e6c806976dab"><td class="cell-title"><a href="https://www.notion.so/Solver-Deployment-CLI-22ccbd127860804596a4e6c806976dab?pvs=21"><img class="icon" src="https://www.notion.so/icons/arrow-turn-right_gray.svg"/>Solver Deployment CLI</a></td><td class="cell-R~w_"><a href="https://www.notion.so/MVP-22ccbd1278608067a583ee22e2a93c86?pvs=21"><img class="icon" src="https://www.notion.so/icons/die2_blue.svg"/>MVP</a></td><td class="cell-TJHM"><a href="https://www.notion.so/M-22ccbd127860805995adc474067d1149?pvs=21"><img class="icon" src="https://www.notion.so/icons/long-sleeve-shirt_lightgray.svg"/>M</a></td><td class="cell-poYG">7.5</td><td class="cell-=~&gt;h">Deploy solvers to a given L2 easily</td></tr><tr id="22ccbd12-7860-80cc-aaeb-f89544ba5c62"><td class="cell-title"><a href="https://www.notion.so/Shared-Order-Storage-22ccbd12786080ccaaebf89544ba5c62?pvs=21"><img class="icon" src="https://www.notion.so/icons/arrow-turn-right_gray.svg"/>Shared Order Storage</a></td><td class="cell-R~w_"><a href="https://www.notion.so/MVP-22ccbd1278608067a583ee22e2a93c86?pvs=21"><img class="icon" src="https://www.notion.so/icons/die2_blue.svg"/>MVP</a></td><td class="cell-TJHM"><a href="https://www.notion.so/S-22ccbd1278608029ae22eac61f7ccdfb?pvs=21"><img class="icon" src="https://www.notion.so/icons/long-sleeve-shirt_lightgray.svg"/>S</a></td><td class="cell-poYG">4</td><td class="cell-=~&gt;h">Using e.g. Redis so that multiple solvers can coordinate</td></tr><tr id="22ccbd12-7860-80e6-95ac-e6ed5a4d8b60"><td class="cell-title"><a href="https://www.notion.so/Documentation-22ccbd12786080e695ace6ed5a4d8b60?pvs=21"><img class="icon" src="https://www.notion.so/icons/arrow-turn-right_gray.svg"/>Documentation</a></td><td class="cell-R~w_"><a href="https://www.notion.so/MVP-22ccbd1278608067a583ee22e2a93c86?pvs=21"><img class="icon" src="https://www.notion.so/icons/die2_blue.svg"/>MVP</a></td><td class="cell-TJHM"><a href="https://www.notion.so/S-22ccbd1278608029ae22eac61f7ccdfb?pvs=21"><img class="icon" src="https://www.notion.so/icons/long-sleeve-shirt_lightgray.svg"/>S</a></td><td class="cell-poYG">4</td><td class="cell-=~&gt;h">Complete operator guides</td></tr><tr id="22ccbd12-7860-8020-9e9d-f2ac5ccf5f86"><td class="cell-title"><a href="https://www.notion.so/Enhanced-Monitoring-22ccbd12786080209e9df2ac5ccf5f86?pvs=21"><img class="icon" src="https://www.notion.so/icons/arrow-turn-right_gray.svg"/>Enhanced Monitoring</a></td><td class="cell-R~w_"><a href="https://www.notion.so/MVP-22ccbd1278608067a583ee22e2a93c86?pvs=21"><img class="icon" src="https://www.notion.so/icons/die2_blue.svg"/>MVP</a></td><td class="cell-TJHM"><a href="https://www.notion.so/S-22ccbd1278608029ae22eac61f7ccdfb?pvs=21"><img class="icon" src="https://www.notion.so/icons/long-sleeve-shirt_lightgray.svg"/>S</a></td><td class="cell-poYG">4</td><td class="cell-=~&gt;h">Alerts and dashboards</td></tr><tr id="22ccbd12-7860-80a2-ac89-e225e8588b4d"><td class="cell-title"><a href="https://www.notion.so/E2E-Testing-22ccbd12786080a2ac89e225e8588b4d?pvs=21"><img class="icon" src="https://www.notion.so/icons/arrow-turn-right_gray.svg"/>E2E Testing</a></td><td class="cell-R~w_"><a href="https://www.notion.so/MVP-22ccbd1278608067a583ee22e2a93c86?pvs=21"><img class="icon" src="https://www.notion.so/icons/die2_blue.svg"/>MVP</a></td><td class="cell-TJHM"><a href="https://www.notion.so/S-22ccbd1278608029ae22eac61f7ccdfb?pvs=21"><img class="icon" src="https://www.notion.so/icons/long-sleeve-shirt_lightgray.svg"/>S</a></td><td class="cell-poYG">4</td><td class="cell-=~&gt;h">Full integration tests</td></tr><tr id="22ccbd12-7860-8033-aa34-fe7b0bc24bc0"><td class="cell-title"><a href="https://www.notion.so/Liquidity-Management-Module-22ccbd1278608033aa34fe7b0bc24bc0?pvs=21"><img class="icon" src="https://www.notion.so/icons/arrow-turn-right_gray.svg"/>Liquidity Management Module</a></td><td class="cell-R~w_"><a href="https://www.notion.so/Post-MVP-22ccbd1278608020b985e7947d9b2f44?pvs=21"><img class="icon" src="https://www.notion.so/icons/die3_brown.svg"/>Post-MVP</a></td><td class="cell-TJHM"><a href="https://www.notion.so/XL-22ccbd127860803da00aea19f7c8e5a5?pvs=21"><img class="icon" src="https://www.notion.so/icons/long-sleeve-shirt_lightgray.svg"/>XL</a></td><td class="cell-poYG">17.5</td><td class="cell-=~&gt;h">Automated rebalancing</td></tr><tr id="22ccbd12-7860-80bd-ac0d-d4d5abfd25aa"><td class="cell-title"><a href="https://www.notion.so/Solver-Auctions-22ccbd12786080bdac0dd4d5abfd25aa?pvs=21"><img class="icon" src="https://www.notion.so/icons/arrow-turn-right_gray.svg"/>Solver Auctions</a></td><td class="cell-R~w_"><a href="https://www.notion.so/Post-MVP-22ccbd1278608020b985e7947d9b2f44?pvs=21"><img class="icon" src="https://www.notion.so/icons/die3_brown.svg"/>Post-MVP</a></td><td class="cell-TJHM"><a href="https://www.notion.so/L-22ccbd1278608065a7addaa36c66dd25?pvs=21"><img class="icon" src="https://www.notion.so/icons/long-sleeve-shirt_lightgray.svg"/>L</a></td><td class="cell-poYG">12.5</td><td class="cell-=~&gt;h">Competitive bidding</td></tr><tr id="22ccbd12-7860-8071-a8d0-d625c90b486a"><td class="cell-title"><a href="https://www.notion.so/Fallback-Mechanisms-22ccbd1278608071a8d0d625c90b486a?pvs=21"><img class="icon" src="https://www.notion.so/icons/arrow-turn-right_gray.svg"/>Fallback Mechanisms</a></td><td class="cell-R~w_"><a href="https://www.notion.so/Post-MVP-22ccbd1278608020b985e7947d9b2f44?pvs=21"><img class="icon" src="https://www.notion.so/icons/die3_brown.svg"/>Post-MVP</a></td><td class="cell-TJHM"><a href="https://www.notion.so/L-22ccbd1278608065a7addaa36c66dd25?pvs=21"><img class="icon" src="https://www.notion.so/icons/long-sleeve-shirt_lightgray.svg"/>L</a></td><td class="cell-poYG">12.5</td><td class="cell-=~&gt;h">Allow multi-hop swaps or strategies with risk tolerances</td></tr><tr id="22ccbd12-7860-80f9-8e66-de012d11f89b"><td class="cell-title"><a href="https://www.notion.so/Bonded-Solvers-22ccbd12786080f98e66de012d11f89b?pvs=21"><img class="icon" src="https://www.notion.so/icons/arrow-turn-right_gray.svg"/>Bonded Solvers</a></td><td class="cell-R~w_"><a href="https://www.notion.so/Post-MVP-22ccbd1278608020b985e7947d9b2f44?pvs=21"><img class="icon" src="https://www.notion.so/icons/die3_brown.svg"/>Post-MVP</a></td><td class="cell-TJHM"><a href="https://www.notion.so/L-22ccbd1278608065a7addaa36c66dd25?pvs=21"><img class="icon" src="https://www.notion.so/icons/long-sleeve-shirt_lightgray.svg"/>L</a></td><td class="cell-poYG">12.5</td><td class="cell-=~&gt;h">For capital efficiency</td></tr><tr id="22ccbd12-7860-8021-8d20-d950d5492422"><td class="cell-title"><a href="https://www.notion.so/Advanced-Analytics-22ccbd12786080218d20d950d5492422?pvs=21"><img class="icon" src="https://www.notion.so/icons/arrow-turn-right_gray.svg"/>Advanced Analytics</a></td><td class="cell-R~w_"><a href="https://www.notion.so/Post-MVP-22ccbd1278608020b985e7947d9b2f44?pvs=21"><img class="icon" src="https://www.notion.so/icons/die3_brown.svg"/>Post-MVP</a></td><td class="cell-TJHM"><a href="https://www.notion.so/M-22ccbd127860805995adc474067d1149?pvs=21"><img class="icon" src="https://www.notion.so/icons/long-sleeve-shirt_lightgray.svg"/>M</a></td><td class="cell-poYG">7.5</td><td class="cell-=~&gt;h">Usage dashboards</td></tr></tbody></table><br/><br/></div><hr id="22ccbd12-7860-800f-ac41-ca6b38c3624d"/><h2 id="22ccbd12-7860-8097-b2c0-c5110bb7545f" class="">Beta Requirements</h2><h3 id="22ccbd12-7860-8037-8627-e307736e762a" class="">Goals</h3><ul id="22ccbd12-7860-80f2-92f2-ddd9d09f649d" class="bulleted-list"><li style="list-style-type:disc">Functional solver that can process basic cross-chain intents</li></ul><ul id="22ccbd12-7860-8011-8059-e85b5aabc6cb" class="bulleted-list"><li style="list-style-type:disc">Support for ERC-7683 standard orders (primary focus)</li></ul><ul id="22ccbd12-7860-8019-ad14-c5912f06f085" class="bulleted-list"><li style="list-style-type:disc">Basic monitoring and operational tooling</li></ul><ul id="22ccbd12-7860-8025-953b-f3bd58f905c4" class="bulleted-list"><li style="list-style-type:disc">Foundation for production blockchain integration</li></ul><h3 id="22ccbd12-7860-8012-9f41-de252b96c3fc" class="">Core Requirements</h3><p id="22ccbd12-7860-807d-b685-d7d13df7e5cc" class=""><strong>Order Type Support</strong></p><ul id="22ccbd12-7860-80ca-8364-e0786347d9aa" class="bulleted-list"><li style="list-style-type:disc"><strong>Primary</strong>: ERC-7683 standard orders</li></ul><ul id="22ccbd12-7860-8062-ad90-d227aad88ee6" class="bulleted-list"><li style="list-style-type:disc"><strong>Secondary</strong>: Consider Li.fi standard interface only if beneficial to ecosystem (not vendor-specific)</li></ul><ul id="22ccbd12-7860-80ff-a306-ecd9a95b30b1" class="bulleted-list"><li style="list-style-type:disc"><strong>Future</strong>: Additional OIF order types (Bridge Order, Limit Order) as defined by smart contract team</li></ul><p id="22ccbd12-7860-808d-9e40-ff66d16d219e" class=""><strong>Settlement Architecture</strong></p><ul id="22ccbd12-7860-800e-90b9-feaf754e24a2" class="bulleted-list"><li style="list-style-type:disc">Support for Arbitrum cross-chain broadcaster as committed settlement mechanism</li></ul><ul id="22ccbd12-7860-802f-aa74-c0b384bfada4" class="bulleted-list"><li style="list-style-type:disc">Two-part settlement flow:<ol type="1" id="22ccbd12-7860-80b1-85b9-dd1e85e0ee76" class="numbered-list" start="1"><li>Generate proof on destination chain that solver fulfilled intent</li></ol><ol type="1" id="22ccbd12-7860-80e6-94f0-d6176f5c4665" class="numbered-list" start="2"><li>Send proof back to source chain to release funds from</li></ol></li></ul><ul id="22ccbd12-7860-80df-bb01-e544753e1198" class="bulleted-list"><li style="list-style-type:disc">Support for two mechanisms:<ul id="22ccbd12-7860-803a-8ee3-e3f2fd10eeb8" class="bulleted-list"><li style="list-style-type:circle">Compact resource locks</li></ul><ul id="22ccbd12-7860-80ac-9394-d115c0c4759b" class="bulleted-list"><li style="list-style-type:circle">Simpler generic escrow</li></ul></li></ul><h3 id="22ccbd12-7860-80cc-aa1b-fa182107e740" class="">Key Architectural Decisions</h3><p id="22ccbd12-7860-8030-842e-e5bb75805dfc" class=""><strong>Delivery Strategy</strong></p><ul id="22ccbd12-7860-80c2-a59a-dc2d31f43851" class="bulleted-list"><li style="list-style-type:disc"><strong>Preferred</strong>: Use third-party services (Alchemy) or OSS relayers rather than building custom solutions</li></ul><ul id="22ccbd12-7860-80a0-9a0b-c461a6edd5a3" class="bulleted-list"><li style="list-style-type:disc"><strong>Avoid</strong>: Custom nonce management, gas optimization, transaction tracking</li></ul><ul id="22ccbd12-7860-8091-a4b0-ce09cd19fe28" class="bulleted-list"><li style="list-style-type:disc"><strong>Rationale</strong>: Focus on reliability and &quot;run and forget&quot; operations</li></ul><p id="22ccbd12-7860-8016-9fcf-c014431ccd2e" class=""><strong>Order Distribution</strong></p><ul id="22ccbd12-7860-8072-95a7-eebb538577f7" class="bulleted-list"><li style="list-style-type:disc"><strong>Phase 1</strong>: Simple &quot;first solver to execute gets paid&quot; model</li></ul><ul id="22ccbd12-7860-8033-8d7c-cd4c11c43d3e" class="bulleted-list"><li style="list-style-type:disc"><strong>Phase 2</strong>: Solver reservation system (see reservation system details below)</li></ul><ul id="22ccbd12-7860-80a3-8e74-eef96ca5488c" class="bulleted-list"><li style="list-style-type:disc"><strong>Not committed</strong>: Auction-based distribution for this phase</li></ul><p id="22ccbd12-7860-80bd-aa0f-e3a89db0dcf2" class=""><strong>Key Management</strong></p><ul id="22ccbd12-7860-8070-b758-ece170c584c7" class="bulleted-list"><li style="list-style-type:disc">Secure storage for private keys and API keys</li></ul><ul id="22ccbd12-7860-801e-8e82-dd103b6a6965" class="bulleted-list"><li style="list-style-type:disc">Assume trusted solver environments</li></ul><ul id="22ccbd12-7860-805c-a3a3-c1f712b64250" class="bulleted-list"><li style="list-style-type:disc">Consider third-party key management for production</li></ul><h3 id="22ccbd12-7860-80e3-ad73-efeea1189470" class="">Beta Success Criteria</h3><ul id="22ccbd12-7860-80c1-87ff-dee86256f080" class="bulleted-list"><li style="list-style-type:disc">Can listen for ERC-7683 intents on EVM chains</li></ul><ul id="22ccbd12-7860-80bb-a3be-e1a47a18908f" class="bulleted-list"><li style="list-style-type:disc">Can validate and fulfill profitable intents</li></ul><ul id="22ccbd12-7860-8034-b84a-d154b1fd18c9" class="bulleted-list"><li style="list-style-type:disc">Can claim settlements using Arbitrum cross-chain broadcaster</li></ul><ul id="22ccbd12-7860-8039-8e24-e50ab1f4c51c" class="bulleted-list"><li style="list-style-type:disc">Basic monitoring and debugging capabilities</li></ul><ul id="22ccbd12-7860-8069-9d3b-f611a4d1e0ae" class="bulleted-list"><li style="list-style-type:disc">Easy deployment process for new L2 chains</li></ul><p id="22ccbd12-7860-8018-aade-dcfe4e181c4a" class="">
+</p><hr id="22ccbd12-7860-8076-9796-c1e39945a70b"/><h2 id="22ccbd12-7860-80ec-b3de-c21746d16ee2" class="">MVP Requirements</h2><h3 id="22ccbd12-7860-80e2-ac75-e75cbc644f01" class="">Goals</h3><ul id="22ccbd12-7860-8076-a090-c5427b8e9e6b" class="bulleted-list"><li style="list-style-type:disc">Production-ready solver with comprehensive order type support</li></ul><ul id="22ccbd12-7860-8084-a97b-cbb1e0308717" class="bulleted-list"><li style="list-style-type:disc">Advanced validation and optimization capabilities</li></ul><ul id="22ccbd12-7860-80f8-a644-f4471fbe05ed" class="bulleted-list"><li style="list-style-type:disc">Complete onboarding solution for new L2 chains</li></ul><ul id="22ccbd12-7860-8081-a10b-dd664a764664" class="bulleted-list"><li style="list-style-type:disc">Real users can start using the system</li></ul><h3 id="22ccbd12-7860-808f-a7ed-d3049677a915" class="">Enhanced Requirements (Building on Beta)</h3><p id="22ccbd12-7860-80c1-92e4-caa7bbc5cffb" class=""><strong>Order Type Expansion</strong></p><ol type="1" id="22ccbd12-7860-80ea-8629-fb2fed33e1c8" class="numbered-list" start="1"><li>Complete OIF Order Type Support - All OIF-defined order types</li></ol><ol type="1" id="22ccbd12-7860-8070-bbf4-c84bbcc8246d" class="numbered-list" start="2"><li>Order Type Router - Unified handling system</li></ol><ol type="1" id="22ccbd12-7860-80f9-a0c9-f93bd36e91fc" class="numbered-list" start="3"><li>Modular Order Processing - Plugin architecture for future types</li></ol><p id="22ccbd12-7860-805a-b68c-ca4c3f2678e7" class=""><strong>Solver Reservation System</strong></p><ul id="22ccbd12-7860-8040-b973-d04000f567d5" class="bulleted-list"><li style="list-style-type:disc">Order contract supports <code>RESERVER</code> role</li></ul><ul id="22ccbd12-7860-805f-bf83-e5a94cc61650" class="bulleted-list"><li style="list-style-type:disc"><code>RESERVER</code> can assign orders to specific solvers with expiration blocks</li></ul><ul id="22ccbd12-7860-8030-a919-cf63f95ded3e" class="bulleted-list"><li style="list-style-type:disc">Only assigned solver can complete order during reservation period</li></ul><ul id="22ccbd12-7860-80c9-b7da-db2f476e103e" class="bulleted-list"><li style="list-style-type:disc">Simple off-chain reservation service run by L2 admins</li></ul><ul id="22ccbd12-7860-8004-8c44-c5f3200ff101" class="bulleted-list"><li style="list-style-type:disc">Naive round-robin distribution among registered solvers initially</li></ul><p id="22ccbd12-7860-8018-8a57-c8a7a7e63a24" class=""><strong>Advanced Features</strong></p><ol type="1" id="22ccbd12-7860-80ed-a82b-e1d52b012147" class="numbered-list" start="1"><li>Validation Plugin System - Extensible validators</li></ol><ol type="1" id="22ccbd12-7860-8021-941d-f1ae8a4bab80" class="numbered-list" start="2"><li>WebSocket Support - Real-time order updates</li></ol><ol type="1" id="22ccbd12-7860-804b-aae8-e079f30f4a0a" class="numbered-list" start="3"><li>Performance Optimization - Throughput improvements</li></ol><ol type="1" id="22ccbd12-7860-806c-80ee-d7ebb26fcbba" class="numbered-list" start="4"><li>Multi-chain EVM Support - Comprehensive chain coverage</li></ol><p id="22ccbd12-7860-8057-97d9-c09292291a94" class=""><strong>Liquidity and Fallback Strategy </strong>(not required for MVP but architectural consideration)</p><ul id="22ccbd12-7860-8039-9c45-c45e1733f820" class="bulleted-list"><li style="list-style-type:disc"><strong>Problem</strong>: What happens when no solver has liquidity?<ul id="22ccbd12-7860-8094-b669-c097dbe3d6ea" class="bulleted-list"><li style="list-style-type:circle">Destination chain lacks liquidity</li></ul><ul id="22ccbd12-7860-806e-b983-d5f7c7c63d80" class="bulleted-list"><li style="list-style-type:circle">Solvers don&#x27;t have required token liquidity</li></ul><ul id="22ccbd12-7860-8020-becb-e04ce65d6773" class="bulleted-list"><li style="list-style-type:circle">New/uncommon tokens</li></ul></li></ul><ul id="22ccbd12-7860-8089-a513-e94a12cc26ae" class="bulleted-list"><li style="list-style-type:disc"><strong>Approach</strong>:<ul id="22ccbd12-7860-8081-8262-f9a9b70f67d2" class="bulleted-list"><li style="list-style-type:circle"><strong>Modular fallback system</strong>: Plugin-based or strategy-based approach</li></ul><ul id="22ccbd12-7860-8077-b3f8-ff46bb1ca79f" class="bulleted-list"><li style="list-style-type:circle"><strong>Multi-hop solutions</strong>: Swap → Bridge → Swap on destination</li></ul><ul id="22ccbd12-7860-80a0-baf5-ece90675bc36" class="bulleted-list"><li style="list-style-type:circle"><strong>Third-party chain routing</strong>: Route through high-liquidity chains</li></ul><ul id="22ccbd12-7860-8009-8b14-f158c3637379" class="bulleted-list"><li style="list-style-type:circle"><strong>Configurable strategies</strong>: Allow solvers to set risk tolerance and fallback preferences</li></ul></li></ul><p id="22ccbd12-7860-8086-8fba-f7e257e04ac1" class=""><strong>Production Excellence</strong></p><ol type="1" id="22ccbd12-7860-80de-954d-ff4626a0754b" class="numbered-list" start="1"><li>Easy Deployment Tools:<ul id="22ccbd12-7860-80d7-a148-d977f04defe8" class="bulleted-list"><li style="list-style-type:disc">CLI for contract deployment</li></ul><ul id="22ccbd12-7860-8084-bc92-e957433ff27c" class="bulleted-list"><li style="list-style-type:disc">CLI for solver deployment and management</li></ul><ul id="22ccbd12-7860-8010-b999-f92c7d46134b" class="bulleted-list"><li style="list-style-type:disc">&quot;Push-button&quot; experience for new L2s</li></ul></li></ol><ol type="1" id="22ccbd12-7860-80cc-9a67-dd662f0585c8" class="numbered-list" start="2"><li>Documentation:<ul id="22ccbd12-7860-8017-9149-e7e2f7523138" class="bulleted-list"><li style="list-style-type:disc">Complete operator guides</li></ul><ul id="22ccbd12-7860-8014-a944-c39fac8c844c" class="bulleted-list"><li style="list-style-type:disc">Integration documentation</li></ul></li></ol><h3 id="22ccbd12-7860-8083-851f-e69539b7a34c" class="">MVP Success Criteria</h3><ul id="22ccbd12-7860-806d-9954-dcd93e9f5975" class="bulleted-list"><li style="list-style-type:disc">Supports all OIF order types on EVM chains</li></ul><ul id="22ccbd12-7860-809b-b426-e688eb25e8b0" class="bulleted-list"><li style="list-style-type:disc">Solver reservation system operational</li></ul><ul id="22ccbd12-7860-802a-ab93-d095b2f82b1d" class="bulleted-list"><li style="list-style-type:disc">Complete onboarding solution for new L2 chains</li></ul><ul id="22ccbd12-7860-8006-97ff-c5099c0ec3da" class="bulleted-list"><li style="list-style-type:disc">Real users successfully processing intents</li></ul><ul id="22ccbd12-7860-80fe-a5eb-ead947e4140c" class="bulleted-list"><li style="list-style-type:disc">Production-grade reliability and monitoring</li></ul><ul id="22ccbd12-7860-8064-bc5b-e8a76e9cad9e" class="bulleted-list"><li style="list-style-type:disc">Successfully processing intents on multiple EVM chains</li></ul><p id="22ccbd12-7860-802d-9950-c0683c09301e" class="">
+</p><hr id="22ccbd12-7860-809a-bb0e-cc488a579841"/><h2 id="22ccbd12-7860-80a0-ba5c-cdc4f398b190" class="">Future Roadmap (Post-MVP)</h2><h3 id="22ccbd12-7860-8045-9f9e-f9fdc092d0f2" class="">Q4 2024 - Advanced Features</h3><ul id="22ccbd12-7860-800a-8daa-eab4a9f20edb" class="bulleted-list"><li style="list-style-type:disc"><strong>Liquidity Management</strong>: Automated rebalancing systems and fallback strategies</li></ul><ul id="22ccbd12-7860-8094-8ec0-c4220e9c96be" class="bulleted-list"><li style="list-style-type:disc"><strong>Solver Auction System</strong>: Competitive bidding for orders</li></ul><ul id="22ccbd12-7860-80f7-8b16-cd42009ca763" class="bulleted-list"><li style="list-style-type:disc"><strong>Advanced Monitoring</strong>: Dashboards and alerting systems</li></ul><ul id="230cbd12-7860-80e9-a49f-fff8d3180353" class="bulleted-list"><li style="list-style-type:disc"><strong>Network Expansion</strong>: Consider non-evm abstractions</li></ul><h3 id="22ccbd12-7860-8032-98c2-e83e24a7fc3a" class="">Q1 2025 - Scale &amp; Optimize</h3><ul id="22ccbd12-7860-8028-b523-dcfd2b3d9558" class="bulleted-list"><li style="list-style-type:disc"><strong>Capital Efficiency</strong>: Bonded solver model (Across Prime approach)</li></ul><ul id="22ccbd12-7860-8047-a17c-dc96c157bbdc" class="bulleted-list"><li style="list-style-type:disc"><strong>Performance Optimization</strong>: High throughput batching</li></ul><ul id="22ccbd12-7860-8004-b70a-e4d990381178" class="bulleted-list"><li style="list-style-type:disc"><strong>Horizontal Scaling</strong>: Multi-solver coordination</li></ul><ul id="22ccbd12-7860-8030-b2c3-c388030fce61" class="bulleted-list"><li style="list-style-type:disc"><strong>Advanced Analytics</strong>: Comprehensive reporting and insights</li></ul><p id="22ccbd12-7860-80d2-a3de-d019c1bad54a" class="">
+</p><hr id="22ccbd12-7860-80a5-8c92-ccad2be4eac6"/><p id="22ccbd12-7860-8027-9657-eddf7d0782a6" class="">
+</p><figure id="22dcbd12-7860-80b0-8daf-ce36f23a3bdf" class="link-to-page"><a href="https://www.notion.so/OIF-Glossary-22dcbd12786080b08dafce36f23a3bdf?pvs=21"><img class="icon" src="https://www.notion.so/icons/book_gray.svg"/>OIF Glossary </a></figure><p id="230cbd12-7860-805a-a8da-cf97b30b4db0" class="">
+</p></div></article><span class="sans" style="font-size:14px;padding-top:2em"></span></body></html>

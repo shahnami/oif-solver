@@ -1,0 +1,117 @@
+# Example configuration for off-chain discovery plugins
+# This demonstrates how to add API poller and webhook discovery to the solver
+
+[solver]
+name = "oif-solver-offchain-example"
+log_level = "debug"
+http_port = 8080
+metrics_port = 9090
+
+# Plugin configuration
+[plugins]
+
+# On-chain discovery - keep existing EIP-7683 discovery
+[plugins.discovery.origin_discovery]
+enabled = true
+plugin_type = "eip7683_onchain"
+
+[plugins.discovery.origin_discovery.config]
+chain_id = 31337
+rpc_url = "http://localhost:8545"
+input_settler_addresses = ["0xCf7Ed3AccA5a467e9e704C703E8D87F634fB0Fc9"]
+monitor_open = true
+monitor_finalised = false
+monitor_order_purchased = false
+
+# Off-chain API poller discovery
+[plugins.discovery.api_poller]
+enabled = true
+plugin_type = "api_poller_discovery"
+
+[plugins.discovery.api_poller.config]
+api_url = "https://api.example-dex.com/v1/orders"
+chain_id = 1  # Ethereum mainnet
+source_name = "example_dex_api"
+poll_interval_ms = 3000  # Poll every 3 seconds
+timeout_ms = 10000
+max_orders_per_request = 50
+
+# Optional: Add custom headers for API authentication
+[plugins.discovery.api_poller.config.headers]
+Authorization = "Bearer your_api_token_here"
+User-Agent = "OIF-Solver/1.0"
+
+# Off-chain webhook discovery  
+[plugins.discovery.webhook_listener]
+enabled = true
+plugin_type = "webhook_discovery"
+
+[plugins.discovery.webhook_listener.config]
+bind_address = "0.0.0.0"
+port = 3001
+webhook_path = "/webhook"
+chain_id = 1
+source_name = "webhook_orders"
+auth_token = "your_webhook_secret_token"
+max_body_size = 2097152  # 2MB
+
+# Another API poller for a different source
+[plugins.discovery.market_maker_api]
+enabled = true
+plugin_type = "api_poller_discovery"
+
+[plugins.discovery.market_maker_api.config]
+api_url = "https://mm.trading-firm.com/api/rfq"
+chain_id = 137  # Polygon
+source_name = "market_maker_rfq"
+poll_interval_ms = 5000
+timeout_ms = 15000
+max_orders_per_request = 20
+
+[plugins.discovery.market_maker_api.config.headers]
+X-API-Key = "your_mm_api_key"
+
+# Delivery plugins (unchanged)
+[plugins.delivery.origin_delivery]
+enabled = true
+plugin_type = "evm_alloy"
+
+[plugins.delivery.origin_delivery.config]
+chain_id = 31337
+rpc_url = "http://localhost:8545"
+private_key = "0xac0974bec39a17e36ba4a6b4d238ff944bacb478cbed5efcae784d7bf4f2ff80"
+max_retries = 3
+timeout_ms = 30000
+enable_eip1559 = true
+
+# Order processors (unchanged)
+[plugins.order.eip7683_processor]
+enabled = true
+plugin_type = "eip7683"
+
+# Settlement plugins (unchanged)
+[plugins.settlement.direct_settlement]
+enabled = true
+plugin_type = "direct_settlement"
+
+# State plugin (unchanged)
+[plugins.state.memory_state]
+enabled = true
+plugin_type = "memory"
+
+# Service configurations
+[discovery]
+realtime_monitoring = true
+max_events_per_second = 1000
+max_concurrent_sources = 15  # Increased to handle more sources
+
+[delivery]
+max_concurrent_deliveries = 100
+retry_delay_ms = 1000
+
+[settlement]
+default_strategy = "direct_settlement"
+monitor_interval_seconds = 10
+
+[state]
+cleanup_interval_hours = 24 

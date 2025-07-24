@@ -6,4 +6,8 @@
 //! from off-chain sources such as APIs, webhooks, message queues, and
 //! other external data providers.
 
-// Placeholder for future off-chain discovery implementations
+pub mod webhook;
+pub mod api_poller;
+
+pub use webhook::{WebhookConfig, WebhookDiscoveryPlugin};
+pub use api_poller::{ApiPollerConfig, ApiPollerDiscoveryPlugin};
