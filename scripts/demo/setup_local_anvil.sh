@@ -367,154 +367,72 @@ create_config() {
     
     mkdir -p config
     
-    cat > config/local.toml << EOF
-# Local dual-chain development configuration for OIF Solver
-# This configuration uses templates to reduce duplication
+    cat > config/example.toml << EOF
+# OIF Solver Configuration - Local Dual-Chain Setup
 
-# Template definitions for reusable configurations
-[templates.local_discovery]
-plugin_type = "eip7683_onchain"
-poll_interval_ms = 3000
-enable_historical_sync = false
-
-[templates.local_delivery]
-plugin_type = "evm_alloy"
-
-[templates.local_delivery_config]
-private_key = "$PRIVATE_KEY"
-max_retries = 3
-timeout_ms = 30000
-enable_eip1559 = true
-nonce_management = true
-max_pending_transactions = 10
-
-# Main solver settings
 [solver]
-name = "oif-solver-local-dual-chain"
-log_level = "debug"
-http_port = 8080
-metrics_port = 9090
+id = "oif-solver-local-dual-chain"
+monitoring_timeout_minutes = 5
 
-# Plugin configuration
-[plugins]
+[storage]
+backend = "file"
+[storage.config]
+storage_path = "./data/storage"
 
-# Discovery plugins - Origin chain (where orders are created)
-[plugins.discovery.origin_discovery]
-enabled = true
-template = "local_discovery"
+[account]
+provider = "local"
+[account.config]
+# Using Anvil's default account #0
+private_key = "$PRIVATE_KEY"
 
-[plugins.discovery.origin_discovery.config]
-chain_id = $ORIGIN_CHAIN_ID
+[delivery]
+min_confirmations = 1
+# Configure multiple delivery providers for different chains
+[delivery.providers.origin]
 rpc_url = "$ORIGIN_RPC_URL"
-input_settler_addresses = ["$INPUT_SETTLER_ADDRESS"]
-# Event monitoring - only monitor Open events on origin
-monitor_open = true
-monitor_finalised = false
-monitor_order_purchased = false
+private_key = "$PRIVATE_KEY"
+chain_id = $ORIGIN_CHAIN_ID  # Anvil origin chain
 
-# Discovery plugins - Destination chain (where fills are confirmed)
-[plugins.discovery.dest_discovery]
-enabled = true
-template = "local_discovery"
-
-[plugins.discovery.dest_discovery.config]
-chain_id = $DEST_CHAIN_ID
+[delivery.providers.destination]
 rpc_url = "$DEST_RPC_URL"
-output_settler_addresses = ["$OUTPUT_SETTLER_ADDRESS"]
-# Event monitoring - only monitor fills and settlements on destination
-monitor_open = false
-monitor_finalised = true
-monitor_order_purchased = true
+private_key = "$PRIVATE_KEY"
+chain_id = $DEST_CHAIN_ID  # Anvil destination chain
 
-# Delivery plugins - Origin chain
-[plugins.delivery.origin_delivery]
-enabled = true
-template = "local_delivery"
-
-[plugins.delivery.origin_delivery.config]
-template = "local_delivery_config"
-chain_id = $ORIGIN_CHAIN_ID
+[discovery]
+# Configure multiple discovery sources
+[discovery.sources.origin_eip7683]
 rpc_url = "$ORIGIN_RPC_URL"
+# InputSettler address on origin chain (where orders are created)
+settler_addresses = ["$INPUT_SETTLER_ADDRESS"]
 
-# Delivery plugins - Destination chain
-[plugins.delivery.dest_delivery]
-enabled = true
-template = "local_delivery"
-
-[plugins.delivery.dest_delivery.config]
-template = "local_delivery_config"
-chain_id = $DEST_CHAIN_ID
+[discovery.sources.destination_eip7683]
 rpc_url = "$DEST_RPC_URL"
+# OutputSettler address on destination chain (where orders are fulfilled)
+settler_addresses = ["$OUTPUT_SETTLER_ADDRESS"]
 
-# State plugins
-[plugins.state.memory_state]
-enabled = true
-plugin_type = "memory"
-
-[plugins.state.memory_state.config]
-max_entries = 1000
-
-[plugins.state.file_state]
-enabled = false
-plugin_type = "file"
-
-[plugins.state.file_state.config]
-storage_path = "./data"
-create_dirs = true
-sync_on_write = true
-
-# Order plugins
-[plugins.order.eip7683_order]
-enabled = true
-plugin_type = "eip7683_order"
-
-[plugins.order.eip7683_order.config]
+[order]
+# EIP-7683 order implementations
+[order.implementations.eip7683]
+# OutputSettler address (destination chain)
+output_settler_address = "$OUTPUT_SETTLER_ADDRESS"
+# InputSettler address (origin chain)
+input_settler_address = "$INPUT_SETTLER_ADDRESS"
+# Solver address (derived from the account private key)
 solver_address = "$PUBLIC_KEY"
-output_settler_addresses = ["$OUTPUT_SETTLER_ADDRESS"]
-input_settler_addresses = ["$INPUT_SETTLER_ADDRESS"]
-oracle_address = "$ORACLE_ADDRESS"
-max_order_age_seconds = 86400
-min_fill_deadline_seconds = 300
-validate_signatures = false  # Disable for local testing
 
-# Settlement plugins
-[plugins.settlement.direct_settlement]
-enabled = true
-plugin_type = "direct_settlement"
+[order.execution_strategy]
+strategy_type = "simple"
+[order.execution_strategy.config]
+max_gas_price_gwei = 100  # Maximum gas price in gwei
 
-[plugins.settlement.direct_settlement.config]
-rpc_url = "$ORIGIN_RPC_URL"  # Connect to origin chain where oracle is deployed
-chain_id = $ORIGIN_CHAIN_ID
+[settlement]
+# Direct settlement implementations
+[settlement.implementations.eip7683]
+rpc_url = "$DEST_RPC_URL"  # Settlement needs to validate fills on destination chain
+# Oracle address on origin chain
 oracle_address = "$ORACLE_ADDRESS"
 min_confirmations = 1
-dispute_period_seconds = 10  # 10 seconds for testing
-claim_window_seconds = 86400  # 24 hours
-
-# Delivery configuration
-[delivery]
-strategy = "RoundRobin"
-fallback_enabled = false
-max_parallel_attempts = 2  # Can process on both chains
-
-# Settlement configuration
-[settlement]
-default_strategy = "direct_settlement"
-fallback_strategies = []
-profit_threshold_wei = "0"  # No profit requirement for testing
-monitor_interval_seconds = 10  # Check fills every 10 seconds
-
-# Discovery configuration
-[discovery]
-realtime_monitoring = true
-max_events_per_second = 1000
-max_concurrent_sources = 2  # Both chains
-
-# State configuration
-[state]
-default_backend = "memory_state"
-enable_metrics = true
-cleanup_interval_seconds = 300  # 5 minutes
-max_concurrent_operations = 100
+dispute_period_seconds = 1  # 1 seconds for testing
 
 # ============================================================================
 # DEMO SCRIPT CONFIGURATION
@@ -557,7 +475,7 @@ RUST_LOG=info
 EOF
 
     echo -e "${GREEN}✅ Dual-chain configuration created${NC}"
-    echo -e "   Config: config/local.toml"
+    echo -e "   Config: config/example.toml"
     echo -e "   Environment: .env"
 }
 
@@ -587,7 +505,7 @@ show_summary() {
     echo -e "   User:    $USER_ADDR (100 TEST + 10,000 ETH each chain)"
     echo ""
     echo -e "${YELLOW}📚 Next Steps:${NC}"
-    echo -e "   1. Start solver: ${BLUE}cargo run --bin solver-service -- --config config/local.toml${NC}"
+    echo -e "   1. Start solver: ${BLUE}cargo run --bin solver-service -- --config config/example.toml${NC}"
     echo -e "   2. Send intent:  ${BLUE}./send_intent.sh${NC} (will create cross-chain order)"
     echo -e "   3. Monitor:      ${BLUE}./monitor_api.sh${NC}"
     echo ""
@@ -672,7 +590,7 @@ case "${1:-setup}" in
             echo -e "${RED}❌ Destination Anvil is not running${NC}"
         fi
         
-        if [ "$origin_running" = true ] && [ "$dest_running" = true ] && [ -f config/local.toml ]; then
+        if [ "$origin_running" = true ] && [ "$dest_running" = true ] && [ -f config/example.toml ]; then
             show_summary
         fi
         ;;

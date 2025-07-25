@@ -1,11 +1,18 @@
+//! Main entry point for the OIF solver service.
+//!
+//! This binary provides a complete solver implementation that discovers,
+//! validates, executes, and settles cross-chain orders. It uses a modular
+//! architecture with pluggable implementations for different components.
+
 use clap::Parser;
-use log::info;
 use solver_config::Config;
 use solver_core::{SolverBuilder, SolverEngine};
 use std::path::PathBuf;
+use tracing::Level;
 
 mod implementations;
 
+/// Command-line arguments for the solver service.
 #[derive(Parser, Debug)]
 #[command(author, version, about, long_about = None)]
 struct Args {
@@ -18,31 +25,61 @@ struct Args {
 	log_level: String,
 }
 
+/// Main entry point for the solver service.
+///
+/// This function:
+/// 1. Parses command-line arguments
+/// 2. Initializes logging infrastructure
+/// 3. Loads configuration from file
+/// 4. Builds the solver engine with all implementations
+/// 5. Runs the solver until interrupted
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
 	let args = Args::parse();
 
-	// Initialize logger
-	env_logger::Builder::from_env(env_logger::Env::default().default_filter_or(&args.log_level))
+	// Initialize tracing
+	let log_level = match args.log_level.to_lowercase().as_str() {
+		"trace" => Level::TRACE,
+		"debug" => Level::DEBUG,
+		"info" => Level::INFO,
+		"warn" => Level::WARN,
+		"error" => Level::ERROR,
+		_ => Level::INFO,
+	};
+
+	tracing_subscriber::fmt()
+		.with_max_level(log_level)
+		.with_thread_ids(true)
+		.with_target(true)
 		.init();
 
-	info!("Starting OIF Solver Service");
+	tracing::info!("Started solver");
 
 	// Load configuration
 	let config = Config::from_file(args.config.to_str().unwrap())?;
-	info!("Loaded configuration for solver: {}", config.solver.id);
+	tracing::info!("Loaded configuration [{}]", config.solver.id);
 
 	// Build solver engine with implementations
 	let solver = build_solver(config)?;
+	tracing::info!("Loaded solver engine");
 
 	// Run the solver
-	info!("Starting solver engine");
 	solver.run().await?;
 
-	info!("Solver service stopped");
+	tracing::info!("Stopped solver");
 	Ok(())
 }
 
+/// Builds the solver engine with all necessary implementations.
+///
+/// This function wires up all the concrete implementations for:
+/// - Storage backends (e.g., in-memory, Redis)
+/// - Account providers (e.g., local keys, AWS KMS)
+/// - Delivery mechanisms (e.g., HTTP RPC, WebSocket)
+/// - Discovery sources (e.g., on-chain events, off-chain APIs)
+/// - Order implementations (e.g., EIP-7683)
+/// - Settlement mechanisms (e.g., direct settlement)
+/// - Execution strategies (e.g., always execute, limit orders)
 fn build_solver(config: Config) -> Result<SolverEngine, Box<dyn std::error::Error>> {
 	let builder = SolverBuilder::new(config)
         // Storage implementations
@@ -55,10 +92,11 @@ fn build_solver(config: Config) -> Result<SolverEngine, Box<dyn std::error::Erro
 
         // Discovery implementations
         .with_discovery_factory("origin_eip7683", implementations::discovery::create_discovery)
+        .with_discovery_factory("destination_eip7683", implementations::discovery::create_discovery)
         // Order implementations
         .with_order_factory("eip7683", implementations::order::create_order_impl)
         // Settlement implementations
-        .with_settlement_factory("direct", implementations::settlement::create_settlement)
+        .with_settlement_factory("eip7683", implementations::settlement::create_settlement)
         // Strategy implementation
         .with_strategy_factory(implementations::strategy::create_strategy);
 

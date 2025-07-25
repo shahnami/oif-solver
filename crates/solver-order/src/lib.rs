@@ -1,30 +1,65 @@
-use alloy_primitives::U256;
+//! Order processing module for the OIF solver system.
+//!
+//! This module handles order validation, execution decisions, and transaction
+//! generation for filling and claiming orders. It supports multiple order
+//! standards and pluggable execution strategies.
+
 use async_trait::async_trait;
 use solver_types::{
-	ExecutionContext, ExecutionDecision, ExecutionParams, FillProof, Intent, Order, Transaction,
+	ConfigSchema, ExecutionContext, ExecutionDecision, ExecutionParams, FillProof, Intent, Order,
+	Transaction,
 };
 use std::collections::HashMap;
 use thiserror::Error;
 
+/// Errors that can occur during order processing operations.
 #[derive(Debug, Error)]
 pub enum OrderError {
+	/// Error that occurs when order validation fails.
 	#[error("Validation failed: {0}")]
 	ValidationFailed(String),
+	/// Error that occurs when the solver has insufficient balance to execute.
 	#[error("Insufficient balance")]
 	InsufficientBalance,
+	/// Error that occurs when the order cannot be satisfied given current conditions.
 	#[error("Cannot satisfy order")]
 	CannotSatisfyOrder,
 }
 
-// Standard-specific implementation
+/// Trait defining the interface for order standard implementations.
+///
+/// This trait must be implemented for each order standard (e.g., EIP-7683)
+/// that the solver supports. It handles standard-specific validation and
+/// transaction generation logic.
 #[async_trait]
 pub trait OrderInterface: Send + Sync {
+	/// Returns the configuration schema for this order implementation.
+	///
+	/// This allows each implementation to define its own configuration requirements
+	/// with specific validation rules. The schema is used to validate TOML configuration
+	/// before initializing the order processor.
+	fn config_schema(&self) -> Box<dyn ConfigSchema>;
+
+	/// Validates an intent and converts it to a standard order format.
+	///
+	/// This method performs standard-specific validation to ensure the intent
+	/// is well-formed and can be processed by the solver.
 	async fn validate_intent(&self, intent: &Intent) -> Result<Order, OrderError>;
+
+	/// Generates a transaction to fill the given order.
+	///
+	/// Creates a blockchain transaction that will execute the order fill
+	/// according to the standard's requirements.
 	async fn generate_fill_transaction(
 		&self,
 		order: &Order,
 		params: &ExecutionParams,
 	) -> Result<Transaction, OrderError>;
+
+	/// Generates a transaction to claim rewards for a filled order.
+	///
+	/// Creates a blockchain transaction that will claim any rewards or fees
+	/// owed to the solver for successfully filling the order.
 	async fn generate_claim_transaction(
 		&self,
 		order: &Order,
@@ -32,18 +67,39 @@ pub trait OrderInterface: Send + Sync {
 	) -> Result<Transaction, OrderError>;
 }
 
-// Solver's execution strategy
+/// Trait defining the interface for execution strategies.
+///
+/// Execution strategies determine when and how orders should be executed
+/// based on market conditions, profitability, and other factors.
 #[async_trait]
 pub trait ExecutionStrategy: Send + Sync {
+	/// Returns the configuration schema for this strategy implementation.
+	///
+	/// This allows each strategy to define its own configuration requirements
+	/// with specific validation rules. The schema is used to validate TOML configuration
+	/// before initializing the strategy.
+	fn config_schema(&self) -> Box<dyn ConfigSchema>;
+
+	/// Determines whether an order should be executed given the current context.
+	///
+	/// Returns an ExecutionDecision indicating whether to execute now,
+	/// skip the order, or defer execution to a later time.
 	async fn should_execute(&self, order: &Order, context: &ExecutionContext) -> ExecutionDecision;
 }
 
+/// Service that manages order processing with multiple implementations and strategies.
+///
+/// The OrderService coordinates between different order standard implementations
+/// and applies the configured execution strategy to make filling decisions.
 pub struct OrderService {
+	/// Map of standard names to their implementations.
 	implementations: HashMap<String, Box<dyn OrderInterface>>,
+	/// The execution strategy to use for making filling decisions.
 	strategy: Box<dyn ExecutionStrategy>,
 }
 
 impl OrderService {
+	/// Creates a new OrderService with the specified implementations and strategy.
 	pub fn new(
 		implementations: HashMap<String, Box<dyn OrderInterface>>,
 		strategy: Box<dyn ExecutionStrategy>,
@@ -54,15 +110,19 @@ impl OrderService {
 		}
 	}
 
+	/// Validates an intent using the appropriate standard implementation.
+	///
+	/// Selects the implementation based on the intent's standard field
+	/// and delegates validation to that implementation.
 	pub async fn validate_intent(&self, intent: &Intent) -> Result<Order, OrderError> {
-		let implementation = self
-			.implementations
-			.get(&intent.standard)
-			.ok_or_else(|| OrderError::ValidationFailed("Unknown standard".into()))?;
+		let implementation = self.implementations.get(&intent.standard).ok_or_else(|| {
+			OrderError::ValidationFailed(format!("Unknown standard: {}", intent.standard))
+		})?;
 
 		implementation.validate_intent(intent).await
 	}
 
+	/// Determines whether an order should be executed using the configured strategy.
 	pub async fn should_execute(
 		&self,
 		order: &Order,
@@ -71,6 +131,9 @@ impl OrderService {
 		self.strategy.should_execute(order, context).await
 	}
 
+	/// Generates a fill transaction for the given order.
+	///
+	/// Uses the appropriate standard implementation to create the transaction.
 	pub async fn generate_fill_transaction(
 		&self,
 		order: &Order,
@@ -86,6 +149,9 @@ impl OrderService {
 			.await
 	}
 
+	/// Generates a claim transaction for a filled order.
+	///
+	/// Uses the appropriate standard implementation to create the transaction.
 	pub async fn generate_claim_transaction(
 		&self,
 		order: &Order,
@@ -99,48 +165,5 @@ impl OrderService {
 		implementation
 			.generate_claim_transaction(order, proof)
 			.await
-	}
-}
-
-// Example strategies
-pub struct AlwaysExecuteStrategy;
-
-#[async_trait]
-impl ExecutionStrategy for AlwaysExecuteStrategy {
-	async fn should_execute(
-		&self,
-		_order: &Order,
-		context: &ExecutionContext,
-	) -> ExecutionDecision {
-		ExecutionDecision::Execute(ExecutionParams {
-			gas_price: context.gas_price,
-			priority_fee: None,
-		})
-	}
-}
-
-pub struct LimitOrderStrategy {
-	pub min_profit_bps: u32,
-	pub max_gas_price: U256,
-}
-
-#[async_trait]
-impl ExecutionStrategy for LimitOrderStrategy {
-	async fn should_execute(
-		&self,
-		_order: &Order,
-		context: &ExecutionContext,
-	) -> ExecutionDecision {
-		// Check gas price limit
-		if context.gas_price > self.max_gas_price {
-			return ExecutionDecision::Defer(std::time::Duration::from_secs(60));
-		}
-
-		// In reality, would calculate actual profit
-		// For now, just execute
-		ExecutionDecision::Execute(ExecutionParams {
-			gas_price: context.gas_price,
-			priority_fee: None,
-		})
 	}
 }

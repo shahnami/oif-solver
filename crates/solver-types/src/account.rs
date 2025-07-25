@@ -1,9 +1,20 @@
+//! Account-related types for the solver system.
+//!
+//! This module defines types for blockchain addresses, signatures, and transactions
+//! that are used throughout the solver for account management and transaction processing.
+
 use alloy_primitives::{Address as AlloyAddress, Bytes, PrimitiveSignature, U256};
 use alloy_rpc_types::TransactionRequest;
 
+/// Blockchain address representation.
+///
+/// Stores addresses as raw bytes to support different blockchain formats.
 #[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 pub struct Address(pub Vec<u8>);
 
+/// Cryptographic signature representation.
+///
+/// Stores signatures as raw bytes in the standard Ethereum format (r, s, v).
 #[derive(Debug, Clone)]
 pub struct Signature(pub Vec<u8>);
 
@@ -21,19 +32,33 @@ impl From<PrimitiveSignature> for Signature {
 	}
 }
 
+/// Blockchain transaction representation.
+///
+/// Contains all fields necessary for constructing and submitting transactions
+/// to various blockchain networks.
 #[derive(Debug, Clone)]
 pub struct Transaction {
+	/// Recipient address (None for contract creation).
 	pub to: Option<Address>,
+	/// Transaction data/calldata.
 	pub data: Vec<u8>,
+	/// Value to transfer in native currency.
 	pub value: U256,
+	/// Chain ID for replay protection.
 	pub chain_id: u64,
+	/// Transaction nonce (optional, can be filled by provider).
 	pub nonce: Option<u64>,
+	/// Gas limit for transaction execution.
 	pub gas_limit: Option<u64>,
+	/// Legacy gas price (for non-EIP-1559 transactions).
 	pub gas_price: Option<u128>,
+	/// Maximum fee per gas (EIP-1559).
 	pub max_fee_per_gas: Option<u128>,
+	/// Maximum priority fee per gas (EIP-1559).
 	pub max_priority_fee_per_gas: Option<u128>,
 }
 
+/// Conversion from Alloy's TransactionRequest to our Transaction type.
 impl From<TransactionRequest> for Transaction {
 	fn from(req: TransactionRequest) -> Self {
 		Transaction {
@@ -53,6 +78,7 @@ impl From<TransactionRequest> for Transaction {
 	}
 }
 
+/// Conversion from our Transaction type to Alloy's TransactionRequest.
 impl From<Transaction> for TransactionRequest {
 	fn from(tx: Transaction) -> Self {
 		let to = tx.to.map(|to| {

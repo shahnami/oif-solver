@@ -1,19 +1,33 @@
+//! Storage backend implementations for the solver service.
+//!
+//! This module provides concrete implementations of the StorageInterface trait,
+//! currently supporting file-based storage for persistence.
+
 use async_trait::async_trait;
 use solver_storage::{StorageError, StorageInterface};
 use std::path::PathBuf;
 use std::time::Duration;
 use tokio::fs;
 
-/// File-based storage implementation
+/// File-based storage implementation.
+///
+/// This implementation stores data as binary files on the filesystem,
+/// providing simple persistence without requiring external dependencies.
 pub struct FileStorage {
+	/// Base directory path for storing files.
 	base_path: PathBuf,
 }
 
 impl FileStorage {
+	/// Creates a new FileStorage instance with the specified base path.
 	pub fn new(base_path: PathBuf) -> Self {
 		Self { base_path }
 	}
 
+	/// Converts a storage key to a filesystem-safe file path.
+	///
+	/// Sanitizes the key by replacing problematic characters and
+	/// appending a .bin extension.
 	fn get_file_path(&self, key: &str) -> PathBuf {
 		// Sanitize key to be filesystem-safe
 		let safe_key = key.replace(['/', ':'], "_");
@@ -80,6 +94,10 @@ impl StorageInterface for FileStorage {
 	}
 }
 
+/// Factory function to create a storage backend from configuration.
+///
+/// Configuration parameters:
+/// - `storage_path`: Base directory for file storage (default: "./data/storage")
 pub fn create_storage(config: &toml::Value) -> Box<dyn StorageInterface> {
 	let storage_path = config
 		.get("storage_path")

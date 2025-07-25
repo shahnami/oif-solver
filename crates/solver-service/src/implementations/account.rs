@@ -1,3 +1,8 @@
+//! Account provider implementations for the solver service.
+//!
+//! This module provides concrete implementations of the AccountInterface trait,
+//! currently supporting local private key wallets using the Alloy library.
+
 use alloy::{
 	consensus::TxLegacy,
 	network::TxSigner,
@@ -6,14 +11,22 @@ use alloy::{
 };
 use async_trait::async_trait;
 use solver_account::{AccountError, AccountInterface};
-use solver_types::{Address, Signature, Transaction};
+use solver_types::{Address, ConfigSchema, Field, FieldType, Schema, Signature, Transaction};
 
-/// Local wallet implementation using Alloy's signer
+/// Local wallet implementation using Alloy's signer.
+///
+/// This implementation manages a private key locally and uses it to sign
+/// transactions and messages. It's suitable for development and testing
+/// environments where key management simplicity is preferred.
 pub struct LocalWallet {
+	/// The underlying Alloy signer that handles cryptographic operations.
 	signer: PrivateKeySigner,
 }
 
 impl LocalWallet {
+	/// Creates a new LocalWallet from a hex-encoded private key.
+	///
+	/// The private key should be provided as a hex string (with or without 0x prefix).
 	pub fn new(private_key_hex: &str) -> Result<Self, AccountError> {
 		// Parse the private key using Alloy's signer
 		let signer = private_key_hex
@@ -24,8 +37,43 @@ impl LocalWallet {
 	}
 }
 
+/// Configuration schema for LocalWallet.
+pub struct LocalWalletSchema;
+
+impl ConfigSchema for LocalWalletSchema {
+	fn validate(&self, config: &toml::Value) -> Result<(), solver_types::ValidationError> {
+		let schema = Schema::new(
+			// Required fields
+			vec![
+				Field::new("private_key", FieldType::String).with_validator(|value| {
+					let key = value.as_str().unwrap();
+					let key_without_prefix = key.strip_prefix("0x").unwrap_or(key);
+
+					if key_without_prefix.len() != 64 {
+						return Err("Private key must be 64 hex characters (32 bytes)".to_string());
+					}
+
+					if hex::decode(key_without_prefix).is_err() {
+						return Err("Private key must be valid hexadecimal".to_string());
+					}
+
+					Ok(())
+				}),
+			],
+			// Optional fields
+			vec![],
+		);
+
+		schema.validate(config)
+	}
+}
+
 #[async_trait]
 impl AccountInterface for LocalWallet {
+	fn config_schema(&self) -> Box<dyn ConfigSchema> {
+		Box::new(LocalWalletSchema)
+	}
+
 	async fn address(&self) -> Result<Address, AccountError> {
 		let alloy_address = self.signer.address();
 		Ok(Address(alloy_address.as_slice().to_vec()))
@@ -79,6 +127,11 @@ impl AccountInterface for LocalWallet {
 	}
 }
 
+/// Factory function to create an account provider from configuration.
+///
+/// This function reads the account configuration and creates the appropriate
+/// AccountInterface implementation. Currently only supports local wallets
+/// with a private_key configuration parameter.
 pub fn create_account(config: &toml::Value) -> Box<dyn AccountInterface> {
 	let private_key = config
 		.get("private_key")

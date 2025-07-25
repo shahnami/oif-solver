@@ -1,3 +1,9 @@
+//! Transaction delivery implementations for the solver service.
+//!
+//! This module provides concrete implementations of the DeliveryInterface trait,
+//! supporting blockchain transaction submission and monitoring using the Alloy library.
+
+use alloy::signers::Signer;
 use alloy::{
 	primitives::FixedBytes,
 	providers::{Provider, ProviderBuilder},
@@ -6,41 +12,107 @@ use alloy::{
 use async_trait::async_trait;
 use solver_delivery::{DeliveryError, DeliveryInterface};
 use solver_types::{
-	Signature, Transaction as SolverTransaction, TransactionHash, TransactionReceipt,
+	ConfigSchema, Field, FieldType, Schema, Signature, Transaction as SolverTransaction,
+	TransactionHash, TransactionReceipt,
 };
 use std::sync::Arc;
 
-/// Alloy-based EVM delivery implementation
+/// Alloy-based EVM delivery implementation.
+///
+/// This implementation uses the Alloy library to submit and monitor transactions
+/// on EVM-compatible blockchains. It handles transaction signing, submission,
+/// and confirmation tracking.
 pub struct AlloyDelivery {
+	/// The Alloy provider for blockchain interaction.
 	provider: Arc<dyn Provider<alloy::transports::http::Http<reqwest::Client>> + Send + Sync>,
+	/// The chain ID this delivery service is configured for.
+	_chain_id: u64,
 }
 
 impl AlloyDelivery {
+	/// Creates a new AlloyDelivery instance.
+	///
+	/// Configures an Alloy provider with the specified RPC URL and signer
+	/// for transaction submission on the given chain.
 	pub async fn new(
 		rpc_url: &str,
-		_chain_id: u64,
-		signer: alloy::signers::local::PrivateKeySigner,
+		chain_id: u64,
+		mut signer: alloy::signers::local::PrivateKeySigner,
 	) -> Result<Self, DeliveryError> {
 		// Create provider with wallet for automatic signing
 		let url = rpc_url
 			.parse()
 			.map_err(|e| DeliveryError::Network(format!("Invalid RPC URL: {}", e)))?;
 
+		// Set the chain ID on the signer
+		signer = signer.with_chain_id(Some(chain_id));
+
 		let wallet = alloy::network::EthereumWallet::from(signer);
 
 		let provider = ProviderBuilder::new()
-			.with_cached_nonce_management()
+			.with_recommended_fillers()
 			.wallet(wallet)
 			.on_http(url);
 
 		Ok(Self {
 			provider: Arc::new(provider),
+			_chain_id: chain_id,
 		})
+	}
+}
+
+/// Configuration schema for Alloy delivery provider.
+pub struct AlloyDeliverySchema;
+
+impl ConfigSchema for AlloyDeliverySchema {
+	fn validate(&self, config: &toml::Value) -> Result<(), solver_types::ValidationError> {
+		let schema = Schema::new(
+			// Required fields
+			vec![
+				Field::new("rpc_url", FieldType::String).with_validator(|value| {
+					let url = value.as_str().unwrap();
+					if url.starts_with("http://") || url.starts_with("https://") {
+						Ok(())
+					} else {
+						Err("RPC URL must start with http:// or https://".to_string())
+					}
+				}),
+				Field::new("private_key", FieldType::String).with_validator(|value| {
+					let key = value.as_str().unwrap();
+					let key_without_prefix = key.strip_prefix("0x").unwrap_or(key);
+
+					if key_without_prefix.len() != 64 {
+						return Err("Private key must be 64 hex characters (32 bytes)".to_string());
+					}
+
+					if hex::decode(key_without_prefix).is_err() {
+						return Err("Private key must be valid hexadecimal".to_string());
+					}
+
+					Ok(())
+				}),
+				Field::new(
+					"chain_id",
+					FieldType::Integer {
+						min: Some(1),
+						max: None,
+					},
+				),
+			],
+			// Optional fields
+			vec![],
+		);
+
+		schema.validate(config)
 	}
 }
 
 #[async_trait]
 impl DeliveryInterface for AlloyDelivery {
+	fn config_schema(&self) -> Box<dyn ConfigSchema> {
+		Box::new(AlloyDeliverySchema)
+	}
+
 	async fn submit(
 		&self,
 		tx: SolverTransaction,
@@ -57,6 +129,13 @@ impl DeliveryInterface for AlloyDelivery {
 
 		// Get the transaction hash
 		let tx_hash = *pending_tx.tx_hash();
+		let hash_str = hex::encode(tx_hash.0);
+		let truncated = if hash_str.len() <= 8 {
+			hash_str.clone()
+		} else {
+			format!("{}..", &hash_str[..8])
+		};
+		tracing::info!(tx_hash = %truncated, "Submitted transaction");
 
 		Ok(TransactionHash(tx_hash.0.to_vec()))
 	}
@@ -120,6 +199,13 @@ impl DeliveryInterface for AlloyDelivery {
 	}
 }
 
+/// Factory function to create an HTTP-based delivery provider from configuration.
+///
+/// This function reads the delivery configuration and creates an AlloyDelivery
+/// instance. Required configuration parameters:
+/// - `rpc_url`: The HTTP RPC endpoint URL
+/// - `chain_id`: The blockchain network chain ID
+/// - `private_key`: The private key for transaction signing
 pub fn create_http_delivery(config: &toml::Value) -> Box<dyn DeliveryInterface> {
 	let rpc_url = config
 		.get("rpc_url")

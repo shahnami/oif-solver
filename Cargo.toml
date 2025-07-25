@@ -67,6 +67,9 @@ clap = { version = "4.5", features = ["derive", "env"] }
 toml = "0.9.2"
 serde_yaml = "0.9"
 
+# Validation
+validator = { version = "0.18", features = ["derive"] }
+
 # Testing
 tempfile = "3.0"
 

@@ -1,4 +1,11 @@
-use alloy_primitives::U256;
+//! Core solver engine for the OIF solver system.
+//!
+//! This module provides the main orchestration logic for the solver, coordinating
+//! between all the various services (discovery, order processing, delivery, settlement)
+//! to execute the complete order lifecycle. It includes the event-driven architecture
+//! and factory pattern for building solver instances.
+
+use alloy_primitives::{hex, U256};
 use solver_account::AccountService;
 use solver_config::Config;
 use solver_delivery::DeliveryService;
@@ -14,30 +21,68 @@ use std::collections::HashMap;
 use std::sync::Arc;
 use thiserror::Error;
 use tokio::sync::mpsc;
+use tracing::instrument;
 
 pub mod event_bus;
 
+/// Utility function to truncate a hex string for display purposes.
+///
+/// Shows only the first 8 characters followed by ".." for longer strings.
+fn truncate_id(id: &str) -> String {
+	if id.len() <= 8 {
+		id.to_string()
+	} else {
+		format!("{}..", &id[..8])
+	}
+}
+
+/// Errors that can occur during solver operations.
 #[derive(Debug, Error)]
 pub enum SolverError {
+	/// Error related to configuration issues.
 	#[error("Configuration error: {0}")]
 	Config(String),
+	/// Error from one of the solver services.
 	#[error("Service error: {0}")]
 	Service(String),
 }
 
+/// Main solver engine that orchestrates the order execution lifecycle.
+///
+/// The SolverEngine coordinates between multiple services:
+/// - Discovery: Finds new orders to process
+/// - Order: Validates and executes orders
+/// - Delivery: Submits transactions to the blockchain
+/// - Settlement: Monitors and claims settled orders
+/// - Storage: Persists state and order information
 pub struct SolverEngine {
+	/// Solver configuration.
 	config: Config,
+	/// Storage service for persisting state.
 	storage: Arc<StorageService>,
+	/// Delivery service for blockchain transactions.
 	delivery: Arc<DeliveryService>,
+	/// Discovery service for finding new orders.
 	discovery: Arc<DiscoveryService>,
+	/// Order service for validation and execution.
 	order: Arc<OrderService>,
+	/// Settlement service for monitoring and claiming.
 	settlement: Arc<SettlementService>,
+	/// Event bus for inter-service communication.
 	event_bus: EventBus,
 }
 
+/// Number of orders to batch together for claim operations.
 static CLAIM_BATCH: usize = 1;
 
 impl SolverEngine {
+	/// Main execution loop for the solver engine.
+	///
+	/// This method:
+	/// 1. Starts discovery monitoring to find new intents
+	/// 2. Subscribes to the event bus for inter-service communication
+	/// 3. Processes discovered intents and system events
+	/// 4. Handles graceful shutdown on Ctrl+C
 	pub async fn run(&self) -> Result<(), SolverError> {
 		// Start discovery monitoring
 		let (intent_tx, mut intent_rx) = mpsc::unbounded_channel();
@@ -51,11 +96,14 @@ impl SolverEngine {
 
 		// Batch claim processing
 		let mut claim_batch = Vec::new();
-
 		loop {
 			tokio::select! {
 				// Handle discovered intents
 				Some(intent) = intent_rx.recv() => {
+					tracing::info!(
+						order_id = %truncate_id(&intent.id),
+						"Discovered intent"
+					);
 					self.handle_intent(intent).await?;
 				}
 
@@ -87,7 +135,6 @@ impl SolverEngine {
 
 				// Shutdown signal
 				_ = tokio::signal::ctrl_c() => {
-					log::info!("Shutting down solver");
 					break;
 				}
 			}
@@ -102,6 +149,14 @@ impl SolverEngine {
 		Ok(())
 	}
 
+	/// Handles a newly discovered intent.
+	///
+	/// This method:
+	/// 1. Validates the intent to create an order
+	/// 2. Stores the validated order
+	/// 3. Checks the execution strategy to determine if/when to execute
+	/// 4. Publishes appropriate events based on the execution decision
+	#[instrument(skip_all, fields(order_id = %truncate_id(&intent.id)))]
 	async fn handle_intent(&self, intent: Intent) -> Result<(), SolverError> {
 		// Validate intent
 		match self.order.validate_intent(&intent).await {
@@ -123,6 +178,7 @@ impl SolverEngine {
 				let context = self.build_execution_context().await?;
 				match self.order.should_execute(&order, &context).await {
 					ExecutionDecision::Execute(params) => {
+						tracing::info!("Executing order");
 						self.event_bus
 							.publish(SolverEvent::Order(OrderEvent::Executing { order, params }))
 							.ok();
@@ -158,6 +214,13 @@ impl SolverEngine {
 		Ok(())
 	}
 
+	/// Handles order execution by generating and submitting a fill transaction.
+	///
+	/// This method:
+	/// 1. Generates a fill transaction for the order
+	/// 2. Submits the transaction through the delivery service
+	/// 3. Stores transaction hashes and mappings for later retrieval
+	#[instrument(skip_all, fields(order_id = %truncate_id(&order.id)))]
 	async fn handle_order_execution(
 		&self,
 		order: Order,
@@ -185,7 +248,7 @@ impl SolverEngine {
 			}))
 			.ok();
 
-		// Store fill transaction
+		// Store fill transaction and timestamp
 		self.storage
 			.store("fills", &order.id, &tx_hash)
 			.await
@@ -193,13 +256,18 @@ impl SolverEngine {
 
 		// Store reverse mapping: tx_hash -> order_id
 		self.storage
-			.store("tx_to_order", &format!("{:?}", tx_hash), &order.id)
+			.store("tx_to_order", &hex::encode(&tx_hash.0), &order.id)
 			.await
 			.map_err(|e| SolverError::Service(e.to_string()))?;
 
 		Ok(())
 	}
 
+	/// Monitors a pending transaction until it is confirmed or fails.
+	///
+	/// Spawns an async task that polls the transaction status at regular intervals
+	/// until the transaction is confirmed, fails, or the monitoring timeout is reached.
+	#[instrument(skip_all, fields(order_id = %truncate_id(&order_id), tx_hash = %truncate_id(&hex::encode(&tx_hash.0))))]
 	async fn handle_transaction_pending(
 		&self,
 		order_id: String,
@@ -213,18 +281,13 @@ impl SolverEngine {
 
 		tokio::spawn(async move {
 			let monitoring_timeout = tokio::time::Duration::from_secs(timeout_minutes * 60);
-			let poll_interval = tokio::time::Duration::from_secs(30); // Poll every 30 seconds
+			let poll_interval = tokio::time::Duration::from_secs(5); // Poll every 5 seconds for faster confirmation
 
 			let start_time = tokio::time::Instant::now();
 
 			loop {
 				// Check if we've exceeded the timeout
 				if start_time.elapsed() > monitoring_timeout {
-					log::warn!(
-						"Transaction monitoring timeout for {} after {} minutes",
-						order_id,
-						timeout_minutes
-					);
 					break;
 				}
 
@@ -234,6 +297,15 @@ impl SolverEngine {
 						// Transaction is confirmed and successful
 						// Get the full receipt for the event
 						if let Ok(receipt) = delivery.confirm_with_default(&tx_hash).await {
+							tracing::info!(
+								order_id = %truncate_id(&order_id),
+								tx_hash = %truncate_id(&hex::encode(&tx_hash.0)),
+								"Confirmed {}",
+								match tx_type {
+									TransactionType::Fill => "fill",
+									TransactionType::Claim => "claim",
+								}
+							);
 							event_bus
 								.publish(SolverEvent::Delivery(
 									DeliveryEvent::TransactionConfirmed {
@@ -243,12 +315,6 @@ impl SolverEngine {
 									},
 								))
 								.ok();
-
-							log::info!(
-								"Transaction confirmed for order {}: {:?}",
-								order_id,
-								tx_type
-							);
 						}
 						break;
 					}
@@ -260,17 +326,10 @@ impl SolverEngine {
 								error: "Transaction reverted".to_string(),
 							}))
 							.ok();
-
-						log::error!("Transaction failed for order {}: {:?}", order_id, tx_type);
 						break;
 					}
-					Err(e) => {
+					Err(_) => {
 						// Transaction not yet confirmed or error
-						log::debug!(
-							"Transaction not yet confirmed for order {}: {}",
-							order_id,
-							e
-						);
 					}
 				}
 
@@ -282,14 +341,18 @@ impl SolverEngine {
 		Ok(())
 	}
 
+	/// Handles confirmed transactions based on their type.
+	///
+	/// Routes handling to specific methods based on whether this is a fill
+	/// or claim transaction.
+	#[instrument(skip_all, fields(tx_hash = %truncate_id(&hex::encode(&tx_hash.0))))]
 	async fn handle_transaction_confirmed(
 		&self,
 		tx_hash: solver_types::TransactionHash,
-		receipt: solver_types::TransactionReceipt,
+		_receipt: solver_types::TransactionReceipt,
 		tx_type: TransactionType,
 	) -> Result<(), SolverError> {
-		if !receipt.success {
-			log::error!("Transaction failed: {:?}", tx_hash);
+		if !_receipt.success {
 			self.event_bus
 				.publish(SolverEvent::Delivery(DeliveryEvent::TransactionFailed {
 					tx_hash,
@@ -299,81 +362,72 @@ impl SolverEngine {
 			return Ok(());
 		}
 
-		log::info!(
-			"Transaction confirmed: {:?} at block {} (type: {:?})",
-			tx_hash,
-			receipt.block_number,
-			tx_type
-		);
-
 		// Handle based on transaction type
 		match tx_type {
 			TransactionType::Fill => {
 				// For fill transactions, start settlement monitoring
-				self.handle_fill_confirmed(tx_hash, receipt).await?;
+				self.handle_fill_confirmed(tx_hash, _receipt).await?;
 			}
 			TransactionType::Claim => {
 				// For claim transactions, mark order as completed
-				self.handle_claim_confirmed(tx_hash, receipt).await?;
+				self.handle_claim_confirmed(tx_hash, _receipt).await?;
 			}
 		}
 
 		Ok(())
 	}
 
+	/// Handles confirmed fill transactions.
+	///
+	/// This method:
+	/// 1. Validates the fill and extracts proof
+	/// 2. Stores the fill proof for later claiming
+	/// 3. Spawns a monitoring task to check when the order can be claimed
 	async fn handle_fill_confirmed(
 		&self,
 		tx_hash: solver_types::TransactionHash,
-		receipt: solver_types::TransactionReceipt,
+		_receipt: solver_types::TransactionReceipt,
 	) -> Result<(), SolverError> {
 		// Look up the order ID from the transaction hash
 		let order_id = match self
 			.storage
-			.retrieve::<String>("tx_to_order", &format!("{:?}", tx_hash))
+			.retrieve::<String>("tx_to_order", &hex::encode(&tx_hash.0))
 			.await
 		{
 			Ok(id) => id,
-			Err(e) => {
-				log::error!("Failed to find order for fill tx {:?}: {}", tx_hash, e);
-				return Ok(()); // Don't fail the handler, just log and continue
+			Err(_) => {
+				return Ok(()); // Don't fail the handler, just continue
 			}
 		};
 
 		// Retrieve the order
 		let order = match self.storage.retrieve::<Order>("orders", &order_id).await {
 			Ok(order) => order,
-			Err(e) => {
-				log::error!("Failed to retrieve order {}: {}", order_id, e);
+			Err(_) => {
 				return Ok(());
 			}
 		};
 
-		log::info!(
-			"Fill transaction confirmed for order {}: {:?} at block {}",
-			order_id,
-			tx_hash,
-			receipt.block_number
-		);
-
 		// Validate the fill and extract proof immediately (synchronously)
 		let fill_proof = match self.settlement.validate_fill(&order, &tx_hash).await {
-			Ok(proof) => {
-				log::info!("Fill validated for order {}", order_id);
-				proof
-			}
+			Ok(proof) => proof,
 			Err(e) => {
-				log::error!("Failed to validate fill for order {}: {:?}", order_id, e);
+				tracing::error!(
+					order_id = %truncate_id(&order_id),
+					error = %e,
+					"Failed to validate fill"
+				);
 				return Ok(());
 			}
 		};
 
 		// Store the fill proof
-		if let Err(e) = self
+		if self
 			.storage
 			.store("fill_proofs", &order.id, &fill_proof)
 			.await
+			.is_err()
 		{
-			log::error!("Failed to store fill proof for order {}: {}", order_id, e);
 			return Ok(());
 		}
 
@@ -385,28 +439,26 @@ impl SolverEngine {
 
 		tokio::spawn(async move {
 			let monitoring_timeout = tokio::time::Duration::from_secs(timeout_minutes * 60);
-			let check_interval = tokio::time::Duration::from_secs(60); // Check every minute
+			let check_interval = tokio::time::Duration::from_secs(1); // Check every 1 second for faster claim detection
 			let start_time = tokio::time::Instant::now();
 
 			loop {
 				// Check if we've exceeded the timeout
 				if start_time.elapsed() > monitoring_timeout {
-					log::warn!(
-						"Claim readiness monitoring timeout for order {} after {} minutes",
-						order_id,
-						timeout_minutes
-					);
 					break;
 				}
 
 				// Check if we can claim
 				if settlement.can_claim(&order_clone, &fill_proof).await {
+					tracing::info!(
+						order_id = %truncate_id(&order_id),
+						"Ready to claim"
+					);
 					event_bus
 						.publish(SolverEvent::Settlement(SettlementEvent::ClaimReady {
 							order_id: order_clone.id,
 						}))
 						.ok();
-					log::info!("Order {} is ready to claim", order_id);
 					break;
 				}
 
@@ -418,32 +470,31 @@ impl SolverEngine {
 		Ok(())
 	}
 
+	/// Handles confirmed claim transactions.
+	///
+	/// Marks the order as completed and publishes the completion event.
 	async fn handle_claim_confirmed(
 		&self,
 		tx_hash: solver_types::TransactionHash,
-		receipt: solver_types::TransactionReceipt,
+		_receipt: solver_types::TransactionReceipt,
 	) -> Result<(), SolverError> {
 		// Look up the order ID from the transaction hash
 		let order_id = match self
 			.storage
-			.retrieve::<String>("tx_to_order", &format!("{:?}", tx_hash))
+			.retrieve::<String>("tx_to_order", &hex::encode(&tx_hash.0))
 			.await
 		{
 			Ok(id) => id,
-			Err(e) => {
-				log::error!("Failed to find order for claim tx {:?}: {}", tx_hash, e);
+			Err(_) => {
 				return Ok(());
 			}
 		};
 
-		log::info!(
-			"Claim transaction confirmed for order {}: {:?} at block {}",
-			order_id,
-			tx_hash,
-			receipt.block_number
-		);
-
 		// Emit completed event
+		tracing::info!(
+			order_id = %truncate_id(&order_id),
+			"Completed"
+		);
 		self.event_bus
 			.publish(SolverEvent::Settlement(SettlementEvent::Completed {
 				order_id: order_id.clone(),
@@ -451,11 +502,18 @@ impl SolverEngine {
 			.ok();
 
 		// Optional: Clean up storage for completed orders
-		log::info!("Order {} settlement completed successfully", order_id);
 
 		Ok(())
 	}
 
+	/// Processes a batch of orders ready for claiming.
+	///
+	/// For each order in the batch:
+	/// 1. Retrieves the order and fill proof from storage
+	/// 2. Generates a claim transaction
+	/// 3. Submits the claim transaction
+	/// 4. Stores transaction hashes and mappings
+	#[instrument(skip_all)]
 	async fn process_claim_batch(&self, batch: &mut Vec<String>) -> Result<(), SolverError> {
 		for order_id in batch.drain(..) {
 			// Retrieve order
@@ -502,13 +560,17 @@ impl SolverEngine {
 
 			// Store reverse mapping: tx_hash -> order_id
 			self.storage
-				.store("tx_to_order", &format!("{:?}", claim_tx_hash), &order.id)
+				.store("tx_to_order", &hex::encode(&claim_tx_hash.0), &order.id)
 				.await
 				.map_err(|e| SolverError::Service(e.to_string()))?;
 		}
 		Ok(())
 	}
 
+	/// Builds the execution context for strategy decisions.
+	///
+	/// In production, this would fetch real-time data such as gas prices,
+	/// solver balances, and other relevant market conditions.
 	async fn build_execution_context(&self) -> Result<ExecutionContext, SolverError> {
 		// In production, would fetch real data
 		Ok(ExecutionContext {
@@ -521,28 +583,40 @@ impl SolverEngine {
 		})
 	}
 
+	/// Returns a reference to the event bus.
 	pub fn event_bus(&self) -> &EventBus {
 		&self.event_bus
 	}
 
+	/// Returns a reference to the configuration.
 	pub fn config(&self) -> &Config {
 		&self.config
 	}
 }
 
-// Type aliases for factory functions
+/// Type alias for storage backend factory function.
 type StorageFactory = Box<dyn Fn(&toml::Value) -> Box<dyn solver_storage::StorageInterface> + Send>;
+/// Type alias for account provider factory function.
 type AccountFactory = Box<dyn Fn(&toml::Value) -> Box<dyn solver_account::AccountInterface> + Send>;
+/// Type alias for delivery provider factory function.
 type DeliveryFactory =
 	Box<dyn Fn(&toml::Value) -> Box<dyn solver_delivery::DeliveryInterface> + Send>;
+/// Type alias for discovery source factory function.
 type DiscoveryFactory =
 	Box<dyn Fn(&toml::Value) -> Box<dyn solver_discovery::DiscoveryInterface> + Send>;
+/// Type alias for order implementation factory function.
 type OrderFactory = Box<dyn Fn(&toml::Value) -> Box<dyn solver_order::OrderInterface> + Send>;
+/// Type alias for settlement implementation factory function.
 type SettlementFactory =
 	Box<dyn Fn(&toml::Value) -> Box<dyn solver_settlement::SettlementInterface> + Send>;
+/// Type alias for execution strategy factory function.
 type StrategyFactory = Box<dyn Fn(&toml::Value) -> Box<dyn solver_order::ExecutionStrategy> + Send>;
 
-// Factory pattern for creating services from config
+/// Builder for constructing a SolverEngine with pluggable implementations.
+///
+/// The SolverBuilder uses the factory pattern to allow different implementations
+/// of each service to be plugged in based on configuration. This enables
+/// flexibility in supporting different blockchains, order types, and strategies.
 pub struct SolverBuilder {
 	config: Config,
 	storage_factory: Option<StorageFactory>,
@@ -555,6 +629,7 @@ pub struct SolverBuilder {
 }
 
 impl SolverBuilder {
+	/// Creates a new SolverBuilder with the given configuration.
 	pub fn new(config: Config) -> Self {
 		Self {
 			config,
@@ -568,6 +643,7 @@ impl SolverBuilder {
 		}
 	}
 
+	/// Sets the factory function for creating storage backends.
 	pub fn with_storage_factory<F>(mut self, factory: F) -> Self
 	where
 		F: Fn(&toml::Value) -> Box<dyn solver_storage::StorageInterface> + Send + 'static,
@@ -576,6 +652,7 @@ impl SolverBuilder {
 		self
 	}
 
+	/// Sets the factory function for creating account providers.
 	pub fn with_account_factory<F>(mut self, factory: F) -> Self
 	where
 		F: Fn(&toml::Value) -> Box<dyn solver_account::AccountInterface> + Send + 'static,
@@ -584,6 +661,9 @@ impl SolverBuilder {
 		self
 	}
 
+	/// Adds a factory function for creating delivery providers.
+	///
+	/// The name parameter should match the provider name in the configuration.
 	pub fn with_delivery_factory<F>(mut self, name: &str, factory: F) -> Self
 	where
 		F: Fn(&toml::Value) -> Box<dyn solver_delivery::DeliveryInterface> + Send + 'static,
@@ -593,6 +673,9 @@ impl SolverBuilder {
 		self
 	}
 
+	/// Adds a factory function for creating discovery sources.
+	///
+	/// The name parameter should match the source name in the configuration.
 	pub fn with_discovery_factory<F>(mut self, name: &str, factory: F) -> Self
 	where
 		F: Fn(&toml::Value) -> Box<dyn solver_discovery::DiscoveryInterface> + Send + 'static,
@@ -602,6 +685,9 @@ impl SolverBuilder {
 		self
 	}
 
+	/// Adds a factory function for creating order implementations.
+	///
+	/// The name parameter should match the implementation name in the configuration.
 	pub fn with_order_factory<F>(mut self, name: &str, factory: F) -> Self
 	where
 		F: Fn(&toml::Value) -> Box<dyn solver_order::OrderInterface> + Send + 'static,
@@ -611,6 +697,9 @@ impl SolverBuilder {
 		self
 	}
 
+	/// Adds a factory function for creating settlement implementations.
+	///
+	/// The name parameter should match the implementation name in the configuration.
 	pub fn with_settlement_factory<F>(mut self, name: &str, factory: F) -> Self
 	where
 		F: Fn(&toml::Value) -> Box<dyn solver_settlement::SettlementInterface> + Send + 'static,
@@ -620,6 +709,7 @@ impl SolverBuilder {
 		self
 	}
 
+	/// Sets the factory function for creating execution strategies.
 	pub fn with_strategy_factory<F>(mut self, factory: F) -> Self
 	where
 		F: Fn(&toml::Value) -> Box<dyn solver_order::ExecutionStrategy> + Send + 'static,
@@ -628,6 +718,13 @@ impl SolverBuilder {
 		self
 	}
 
+	/// Builds the SolverEngine using the configured factories.
+	///
+	/// This method:
+	/// 1. Creates all service instances using the provided factories
+	/// 2. Validates that all required services are configured
+	/// 3. Wires up the services with proper dependencies
+	/// 4. Returns a fully configured SolverEngine ready to run
 	pub fn build(self) -> Result<SolverEngine, SolverError> {
 		// Create storage backend
 		let storage_backend = self
@@ -636,6 +733,7 @@ impl SolverBuilder {
 			&self.config.storage.config,
 		);
 		let storage = Arc::new(StorageService::new(storage_backend));
+		tracing::info!(component = "storage", implementation = %self.config.storage.backend, "Loaded");
 
 		// Create account provider
 		let account_provider = self
@@ -644,12 +742,35 @@ impl SolverBuilder {
 			&self.config.account.config,
 		);
 		let account = Arc::new(AccountService::new(account_provider));
+		tracing::info!(component = "account", implementation = %self.config.account.provider, "Loaded");
 
 		// Create delivery providers
-		let mut delivery_providers = Vec::new();
+		let mut delivery_providers = HashMap::new();
 		for (name, config) in &self.config.delivery.providers {
 			if let Some(factory) = self.delivery_factories.get(name) {
-				delivery_providers.push(factory(config));
+				// Extract chain_id from the config
+				let chain_id = config
+					.get("chain_id")
+					.and_then(|v| v.as_integer())
+					.ok_or_else(|| {
+						SolverError::Config(format!(
+							"chain_id missing for delivery provider {}",
+							name
+						))
+					})? as u64;
+
+				let provider = factory(config);
+
+				// Validate the configuration using the provider's schema
+				provider.config_schema().validate(config).map_err(|e| {
+					SolverError::Config(format!(
+						"Invalid configuration for delivery provider '{}': {}",
+						name, e
+					))
+				})?;
+
+				delivery_providers.insert(chain_id, provider);
+				tracing::info!(component = "delivery", implementation = %name, chain_id = %chain_id, "Loaded");
 			}
 		}
 
@@ -662,14 +783,25 @@ impl SolverBuilder {
 		let delivery = Arc::new(DeliveryService::new(
 			delivery_providers,
 			account.clone(),
-			self.config.delivery.confirmations,
+			self.config.delivery.min_confirmations,
 		));
 
 		// Create discovery sources
 		let mut discovery_sources = Vec::new();
 		for (name, config) in &self.config.discovery.sources {
 			if let Some(factory) = self.discovery_factories.get(name) {
-				discovery_sources.push(factory(config));
+				let source = factory(config);
+
+				// Validate the configuration using the source's schema
+				source.config_schema().validate(config).map_err(|e| {
+					SolverError::Config(format!(
+						"Invalid configuration for discovery source '{}': {}",
+						name, e
+					))
+				})?;
+
+				discovery_sources.push(source);
+				tracing::info!(component = "discovery", implementation = %name, "Loaded");
 			}
 		}
 
@@ -679,7 +811,21 @@ impl SolverBuilder {
 		let mut order_impls = HashMap::new();
 		for (name, config) in &self.config.order.implementations {
 			if let Some(factory) = self.order_factories.get(name) {
-				order_impls.insert(name.clone(), factory(config));
+				let implementation = factory(config);
+
+				// Validate the configuration using the implementation's schema
+				implementation
+					.config_schema()
+					.validate(config)
+					.map_err(|e| {
+						SolverError::Config(format!(
+							"Invalid configuration for order implementation '{}': {}",
+							name, e
+						))
+					})?;
+
+				order_impls.insert(name.clone(), implementation);
+				tracing::info!(component = "order", implementation = %name, "Loaded");
 			}
 		}
 
@@ -689,6 +835,7 @@ impl SolverBuilder {
 			.ok_or_else(|| SolverError::Config("Strategy factory not provided".into()))?(
 			&self.config.order.execution_strategy.config,
 		);
+		tracing::info!(component = "strategy", implementation = %self.config.order.execution_strategy.strategy_type, "Loaded");
 
 		let order = Arc::new(OrderService::new(order_impls, strategy));
 
@@ -696,7 +843,21 @@ impl SolverBuilder {
 		let mut settlement_impls = HashMap::new();
 		for (name, config) in &self.config.settlement.implementations {
 			if let Some(factory) = self.settlement_factories.get(name) {
-				settlement_impls.insert(name.clone(), factory(config));
+				let implementation = factory(config);
+
+				// Validate the configuration using the implementation's schema
+				implementation
+					.config_schema()
+					.validate(config)
+					.map_err(|e| {
+						SolverError::Config(format!(
+							"Invalid configuration for settlement '{}': {}",
+							name, e
+						))
+					})?;
+
+				settlement_impls.insert(name.clone(), implementation);
+				tracing::info!(component = "settlement", implementation = %name, "Loaded");
 			}
 		}
 
