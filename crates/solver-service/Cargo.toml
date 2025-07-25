@@ -1,50 +1,31 @@
 [package]
 name = "solver-service"
-version.workspace = true
-edition.workspace = true
-authors.workspace = true
-license.workspace = true
-repository.workspace = true
+version = "0.1.0"
+edition = "2021"
 
 [[bin]]
-name = "solver-service"
+name = "solver"
 path = "src/main.rs"
 
 [dependencies]
-# Internal dependencies
-solver-types = { path = "../solver-types" }
-solver-core = { path = "../solver-core" }
+solver-account = { path = "../solver-account" }
 solver-config = { path = "../solver-config" }
+solver-core = { path = "../solver-core" }
 solver-delivery = { path = "../solver-delivery" }
 solver-discovery = { path = "../solver-discovery" }
-solver-plugin = { path = "../solver-plugin" }
+solver-order = { path = "../solver-order" }
+solver-settlement = { path = "../solver-settlement" }
+solver-storage = { path = "../solver-storage" }
+solver-types = { path = "../solver-types" }
 
-toml = "0.7"
-
-# Async runtime
-tokio.workspace = true
-
-# Web framework
-axum.workspace = true
-tower.workspace = true
-tower-http.workspace = true
-
-# CLI
-clap.workspace = true
-
-# Serialization
-serde.workspace = true
-serde_json.workspace = true
-
-# Logging
-tracing.workspace = true
+async-trait = "0.1"
+clap = { version = "4.5", features = ["derive"] }
+env_logger = "0.11"
+reqwest = "0.12"
+serde = { version = "1.0", features = ["derive"] }
+serde_json = "1.0"
+thiserror = "1.0"
+tokio = { version = "1.0", features = ["full"] }
+toml = "0.8"
+tracing = "0.1"
 tracing-subscriber = { version = "0.3", features = ["env-filter"] }
-
-# Error handling
-anyhow.workspace = true
-
-# Utilities
-hex.workspace = true
-bytes.workspace = true
-chrono = { version = "0.4", features = ["serde"] }
-regex = "1.10"

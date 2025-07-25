@@ -1,208 +1,112 @@
-//! # Solver Service Binary
-//!
 //! Main entry point for the OIF solver service.
 //!
-//! This binary provides a command-line interface for running the solver system,
-//! including configuration validation, service startup, and graceful shutdown.
-//! It orchestrates all solver components and provides HTTP and metrics endpoints
-//! for monitoring and interaction.
+//! This binary provides a complete solver implementation that discovers,
+//! validates, executes, and settles cross-chain orders. It uses a modular
+//! architecture with pluggable implementations for different components.
 
-use anyhow::{Context, Result};
-use clap::{Parser, Subcommand};
-use solver_config::ConfigLoader;
-use solver_core::OrchestratorBuilder;
+use clap::Parser;
+use solver_config::Config;
+use solver_core::{SolverBuilder, SolverEngine};
 use std::path::PathBuf;
-use std::sync::Arc;
-use tokio::signal;
-use tracing::info;
-use tracing_subscriber::{layer::SubscriberExt, util::SubscriberInitExt};
+use tracing::Level;
 
-mod api;
-mod service;
+// Import implementations from individual crates
+use solver_account::implementations::local::create_account;
+use solver_delivery::implementations::evm::alloy::create_http_delivery;
+use solver_discovery::implementations::onchain::_7683::create_discovery;
+use solver_order::implementations::{
+	standards::_7683::create_order_impl, strategies::simple::create_strategy,
+};
+use solver_settlement::implementations::direct::create_settlement;
+use solver_storage::implementations::file::create_storage;
 
-/// Command-line interface for the solver service.
-#[derive(Parser)]
-#[command(name = "solver-service")]
-#[command(about = "OIF Solver Service", long_about = None)]
-struct Cli {
-	/// Subcommand to execute
-	#[command(subcommand)]
-	command: Option<Commands>,
-
+/// Command-line arguments for the solver service.
+#[derive(Parser, Debug)]
+#[command(author, version, about, long_about = None)]
+struct Args {
 	/// Path to configuration file
-	#[arg(short, long, value_name = "FILE", default_value = "config/local.toml")]
+	#[arg(short, long, default_value = "config.toml")]
 	config: PathBuf,
 
-	/// Logging level for the service
-	#[arg(long, env = "SOLVER_LOG_LEVEL", default_value = "info")]
+	/// Log level (trace, debug, info, warn, error)
+	#[arg(short, long, default_value = "info")]
 	log_level: String,
 }
 
-/// Available subcommands for the solver service.
-#[derive(Subcommand)]
-enum Commands {
-	/// Start the solver service with full orchestration
-	Start,
-	/// Validate the configuration file without starting services
-	Validate,
-}
-
+/// Main entry point for the solver service.
+///
+/// This function:
+/// 1. Parses command-line arguments
+/// 2. Initializes logging infrastructure
+/// 3. Loads configuration from file
+/// 4. Builds the solver engine with all implementations
+/// 5. Runs the solver until interrupted
 #[tokio::main]
-async fn main() -> Result<()> {
-	let cli = Cli::parse();
+async fn main() -> Result<(), Box<dyn std::error::Error>> {
+	let args = Args::parse();
 
 	// Initialize tracing
-	setup_tracing(&cli.log_level)?;
+	let log_level = match args.log_level.to_lowercase().as_str() {
+		"trace" => Level::TRACE,
+		"debug" => Level::DEBUG,
+		"info" => Level::INFO,
+		"warn" => Level::WARN,
+		"error" => Level::ERROR,
+		_ => Level::INFO,
+	};
 
-	// Handle commands
-	match cli.command {
-		Some(Commands::Start) | None => start_service(cli).await,
-		Some(Commands::Validate) => validate_config(cli).await,
-	}
-}
-
-/// Start the solver service with full orchestration.
-///
-/// Loads configuration, creates the orchestrator, starts all services,
-/// and runs until a shutdown signal is received.
-async fn start_service(cli: Cli) -> Result<()> {
-	info!("Starting OIF Solver Service");
-	info!("Loading configuration from: {:?}", cli.config);
-
-	// Load configuration
-	let config = ConfigLoader::new()
-		.with_file(&cli.config)
-		.load()
-		.await
-		.context("Failed to load configuration")?;
-
-	info!("Configuration loaded successfully");
-	info!("Solver name: {}", config.solver.name);
-	info!("HTTP port: {}", config.solver.http_port);
-	info!("Metrics port: {}", config.solver.metrics_port);
-
-	// Create orchestrator
-	let orchestrator = OrchestratorBuilder::new()
-		.with_config(config.clone())
-		.build()
-		.await
-		.context("Failed to build orchestrator")?;
-
-	let orchestrator = Arc::new(orchestrator);
-
-	// Start the orchestrator
-	orchestrator
-		.start()
-		.await
-		.context("Failed to start orchestrator")?;
-
-	// Create the service with orchestrator
-	let service = service::SolverService::new(orchestrator.clone(), config.clone());
-
-	// Start HTTP server
-	let http_handle =
-		tokio::spawn(async move { api::start_http_server(service, config.solver.http_port).await });
-
-	// Start metrics server
-	let metrics_port = config.solver.metrics_port;
-	let metrics_handle = tokio::spawn(async move { api::start_metrics_server(metrics_port).await });
-
-	// Setup graceful shutdown
-	let shutdown_signal = setup_shutdown_signal();
-
-	info!("OIF Solver Service started successfully");
-
-	// Wait for shutdown signal
-	shutdown_signal.await;
-
-	info!("Shutdown signal received, stopping services...");
-
-	// Shutdown orchestrator
-	orchestrator
-		.shutdown()
-		.await
-		.context("Failed to shutdown orchestrator")?;
-
-	// Cancel the server tasks
-	http_handle.abort();
-	metrics_handle.abort();
-
-	info!("OIF Solver Service stopped");
-	Ok(())
-}
-
-/// Validate configuration file without starting services.
-///
-/// Loads and validates the configuration file, checking that all
-/// plugins are properly configured and requirements are met.
-async fn validate_config(cli: Cli) -> Result<()> {
-	info!("Validating configuration file: {:?}", cli.config);
-
-	// Try to load the configuration
-	let config = ConfigLoader::new()
-		.with_file(&cli.config)
-		.load()
-		.await
-		.context("Failed to load configuration")?;
-
-	info!("Configuration is valid");
-	info!("Solver name: {}", config.solver.name);
-	info!("Enabled plugins:");
-
-	// Print enabled plugins
-	for (name, plugin) in &config.plugins.discovery {
-		if plugin.enabled {
-			info!("  Discovery: {} ({})", name, plugin.plugin_type);
-		}
-	}
-
-	for (name, plugin) in &config.plugins.delivery {
-		if plugin.enabled {
-			info!("  Delivery: {} ({})", name, plugin.plugin_type);
-		}
-	}
-
-	for (name, plugin) in &config.plugins.state {
-		if plugin.enabled {
-			info!("  State: {} ({})", name, plugin.plugin_type);
-		}
-	}
-
-	Ok(())
-}
-
-fn setup_tracing(log_level: &str) -> Result<()> {
-	let env_filter = tracing_subscriber::EnvFilter::try_from_default_env()
-		.unwrap_or_else(|_| tracing_subscriber::EnvFilter::new(log_level));
-
-	tracing_subscriber::registry()
-		.with(env_filter)
-		.with(tracing_subscriber::fmt::layer())
+	tracing_subscriber::fmt()
+		.with_max_level(log_level)
+		.with_thread_ids(true)
+		.with_target(true)
 		.init();
 
+	tracing::info!("Started solver");
+
+	// Load configuration
+	let config = Config::from_file(args.config.to_str().unwrap())?;
+	tracing::info!("Loaded configuration [{}]", config.solver.id);
+
+	// Build solver engine with implementations
+	let solver = build_solver(config)?;
+	tracing::info!("Loaded solver engine");
+
+	// Run the solver
+	solver.run().await?;
+
+	tracing::info!("Stopped solver");
 	Ok(())
 }
 
-async fn setup_shutdown_signal() {
-	let ctrl_c = async {
-		signal::ctrl_c()
-			.await
-			.expect("failed to install Ctrl+C handler");
-	};
+/// Builds the solver engine with all necessary implementations.
+///
+/// This function wires up all the concrete implementations for:
+/// - Storage backends (e.g., in-memory, Redis)
+/// - Account providers (e.g., local keys, AWS KMS)
+/// - Delivery mechanisms (e.g., HTTP RPC, WebSocket)
+/// - Discovery sources (e.g., on-chain events, off-chain APIs)
+/// - Order implementations (e.g., EIP-7683)
+/// - Settlement mechanisms (e.g., direct settlement)
+/// - Execution strategies (e.g., always execute, limit orders)
+fn build_solver(config: Config) -> Result<SolverEngine, Box<dyn std::error::Error>> {
+	let builder = SolverBuilder::new(config)
+        // Storage implementations
+        .with_storage_factory(create_storage)
+        // Account implementations
+        .with_account_factory(create_account)
+        // Delivery implementations
+        .with_delivery_factory("origin", create_http_delivery)
+        .with_delivery_factory("destination", create_http_delivery)
 
-	#[cfg(unix)]
-	let terminate = async {
-		signal::unix::signal(signal::unix::SignalKind::terminate())
-			.expect("failed to install signal handler")
-			.recv()
-			.await;
-	};
+        // Discovery implementations
+        .with_discovery_factory("origin_eip7683", create_discovery)
+        .with_discovery_factory("destination_eip7683", create_discovery)
+        // Order implementations
+        .with_order_factory("eip7683", create_order_impl)
+        // Settlement implementations
+        .with_settlement_factory("eip7683", create_settlement)
+        // Strategy implementation
+        .with_strategy_factory(create_strategy);
 
-	#[cfg(not(unix))]
-	let terminate = std::future::pending::<()>();
-
-	tokio::select! {
-		_ = ctrl_c => {},
-		_ = terminate => {},
-	}
+	Ok(builder.build()?)
 }

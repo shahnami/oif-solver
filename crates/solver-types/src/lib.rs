@@ -1,22 +1,26 @@
-//! # Solver Types
+//! Common types module for the OIF solver system.
 //!
-//! Core type definitions shared across all solver components.
-//!
-//! This crate provides the fundamental data structures, enums, and traits
-//! that define the interfaces and data models used throughout the solver
-//! system. It includes configuration types, event definitions, and plugin
-//! interfaces that enable the modular architecture of the solver.
-//!
-//! ## Modules
-//!
-//! - **configs**: Configuration structures for all solver components
-//! - **events**: Event types for the event-driven architecture
-//! - **plugins**: Plugin interfaces and base traits for extensibility
+//! This module defines the core data types and structures used throughout
+//! the solver system. It provides a centralized location for shared types
+//! to ensure consistency across all solver components.
 
-pub mod configs;
+/// Account-related types for managing solver identities and signatures.
+pub mod account;
+/// Transaction delivery types for blockchain interactions.
+pub mod delivery;
+/// Intent discovery types for finding and processing new orders.
+pub mod discovery;
+/// Event types for inter-service communication.
 pub mod events;
-pub mod plugins;
+/// Order processing types including intents, orders, and execution contexts.
+pub mod order;
+/// Configuration validation types for ensuring type-safe configurations.
+pub mod validation;
 
-pub use configs::*;
+// Re-export all types for convenient access
+pub use account::*;
+pub use delivery::*;
+pub use discovery::*;
 pub use events::*;
-pub use plugins::*;
+pub use order::*;
+pub use validation::*;
