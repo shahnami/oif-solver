@@ -3,8 +3,8 @@
 //! This module provides concrete implementations of the StorageInterface trait,
 //! currently supporting file-based storage for persistence.
 
+use crate::{StorageError, StorageInterface};
 use async_trait::async_trait;
-use solver_storage::{StorageError, StorageInterface};
 use std::path::PathBuf;
 use std::time::Duration;
 use tokio::fs;

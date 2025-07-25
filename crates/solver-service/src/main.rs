@@ -10,7 +10,15 @@ use solver_core::{SolverBuilder, SolverEngine};
 use std::path::PathBuf;
 use tracing::Level;
 
-mod implementations;
+// Import implementations from individual crates
+use solver_account::implementations::local::create_account;
+use solver_delivery::implementations::evm::alloy::create_http_delivery;
+use solver_discovery::implementations::onchain::_7683::create_discovery;
+use solver_order::implementations::{
+	standards::_7683::create_order_impl, strategies::simple::create_strategy,
+};
+use solver_settlement::implementations::direct::create_settlement;
+use solver_storage::implementations::file::create_storage;
 
 /// Command-line arguments for the solver service.
 #[derive(Parser, Debug)]
@@ -83,22 +91,22 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 fn build_solver(config: Config) -> Result<SolverEngine, Box<dyn std::error::Error>> {
 	let builder = SolverBuilder::new(config)
         // Storage implementations
-        .with_storage_factory(implementations::storage::create_storage)
+        .with_storage_factory(create_storage)
         // Account implementations
-        .with_account_factory(implementations::account::create_account)
+        .with_account_factory(create_account)
         // Delivery implementations
-        .with_delivery_factory("origin", implementations::delivery::create_http_delivery)
-        .with_delivery_factory("destination", implementations::delivery::create_http_delivery)
+        .with_delivery_factory("origin", create_http_delivery)
+        .with_delivery_factory("destination", create_http_delivery)
 
         // Discovery implementations
-        .with_discovery_factory("origin_eip7683", implementations::discovery::create_discovery)
-        .with_discovery_factory("destination_eip7683", implementations::discovery::create_discovery)
+        .with_discovery_factory("origin_eip7683", create_discovery)
+        .with_discovery_factory("destination_eip7683", create_discovery)
         // Order implementations
-        .with_order_factory("eip7683", implementations::order::create_order_impl)
+        .with_order_factory("eip7683", create_order_impl)
         // Settlement implementations
-        .with_settlement_factory("eip7683", implementations::settlement::create_settlement)
+        .with_settlement_factory("eip7683", create_settlement)
         // Strategy implementation
-        .with_strategy_factory(implementations::strategy::create_strategy);
+        .with_strategy_factory(create_strategy);
 
 	Ok(builder.build()?)
 }

@@ -3,14 +3,13 @@
 //! This module provides concrete implementations of the SettlementInterface trait,
 //! handling fill validation and claim readiness checks for cross-chain orders.
 
-use alloy::{
-	primitives::{Address as AlloyAddress, FixedBytes},
-	providers::{Provider, RootProvider},
-	rpc::types::BlockTransactionsKind,
-};
+use crate::{SettlementError, SettlementInterface};
+use alloy_primitives::{Address as AlloyAddress, FixedBytes};
+use alloy_provider::{Provider, RootProvider};
+use alloy_rpc_types::BlockTransactionsKind;
+use alloy_transport_http::Http;
 use async_trait::async_trait;
 use serde::{Deserialize, Serialize};
-use solver_settlement::{SettlementError, SettlementInterface};
 use solver_types::{ConfigSchema, Field, FieldType, FillProof, Order, Schema, TransactionHash};
 
 /// Direct settlement implementation.
@@ -19,7 +18,7 @@ use solver_types::{ConfigSchema, Field, FieldType, FillProof, Order, Schema, Tra
 /// and manages dispute periods before allowing claims.
 pub struct DirectSettlement {
 	/// The Alloy provider for blockchain interaction.
-	provider: alloy::providers::RootProvider<alloy::transports::http::Http<reqwest::Client>>,
+	provider: RootProvider<Http<reqwest::Client>>,
 	/// Oracle address for attestation verification.
 	oracle_address: String,
 	/// Minimum confirmations required for fill validation.
@@ -181,8 +180,8 @@ impl SettlementInterface for DirectSettlement {
 		let block = self
 			.provider
 			.get_block_by_number(
-				alloy::rpc::types::BlockNumberOrTag::Number(tx_block),
-				alloy::rpc::types::BlockTransactionsKind::Hashes,
+				alloy_rpc_types::BlockNumberOrTag::Number(tx_block),
+				BlockTransactionsKind::Hashes,
 			)
 			.await
 			.map_err(|e| {

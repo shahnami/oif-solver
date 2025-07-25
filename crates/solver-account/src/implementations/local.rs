@@ -3,14 +3,13 @@
 //! This module provides concrete implementations of the AccountInterface trait,
 //! currently supporting local private key wallets using the Alloy library.
 
-use alloy::{
-	consensus::TxLegacy,
-	network::TxSigner,
-	primitives::{Address as AlloyAddress, Bytes, TxKind},
-	signers::{local::PrivateKeySigner, Signer},
-};
+use crate::{AccountError, AccountInterface};
+use alloy_consensus::TxLegacy;
+use alloy_network::TxSigner;
+use alloy_primitives::{Address as AlloyAddress, Bytes, TxKind};
+use alloy_signer::Signer;
+use alloy_signer_local::PrivateKeySigner;
 use async_trait::async_trait;
-use solver_account::{AccountError, AccountInterface};
 use solver_types::{Address, ConfigSchema, Field, FieldType, Schema, Signature, Transaction};
 
 /// Local wallet implementation using Alloy's signer.

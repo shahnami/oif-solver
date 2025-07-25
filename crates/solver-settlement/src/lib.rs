@@ -9,6 +9,11 @@ use solver_types::{ConfigSchema, FillProof, Order, TransactionHash};
 use std::collections::HashMap;
 use thiserror::Error;
 
+/// Re-export implementations
+pub mod implementations {
+	pub mod direct;
+}
+
 /// Errors that can occur during settlement operations.
 #[derive(Debug, Error)]
 pub enum SettlementError {

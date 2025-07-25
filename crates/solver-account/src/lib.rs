@@ -8,6 +8,11 @@ use async_trait::async_trait;
 use solver_types::{Address, ConfigSchema, Signature, Transaction};
 use thiserror::Error;
 
+/// Re-export implementations
+pub mod implementations {
+	pub mod local;
+}
+
 /// Errors that can occur during account operations.
 #[derive(Debug, Error)]
 pub enum AccountError {

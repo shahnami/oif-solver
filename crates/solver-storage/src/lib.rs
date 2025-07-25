@@ -9,6 +9,11 @@ use serde::{de::DeserializeOwned, Serialize};
 use std::time::Duration;
 use thiserror::Error;
 
+/// Re-export implementations
+pub mod implementations {
+	pub mod file;
+}
+
 /// Errors that can occur during storage operations.
 #[derive(Debug, Error)]
 pub enum StorageError {

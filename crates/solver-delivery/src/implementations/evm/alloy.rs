@@ -3,14 +3,15 @@
 //! This module provides concrete implementations of the DeliveryInterface trait,
 //! supporting blockchain transaction submission and monitoring using the Alloy library.
 
-use alloy::signers::Signer;
-use alloy::{
-	primitives::FixedBytes,
-	providers::{Provider, ProviderBuilder},
-	rpc::types::TransactionRequest,
-};
+use crate::{DeliveryError, DeliveryInterface};
+use alloy_network::EthereumWallet;
+use alloy_primitives::FixedBytes;
+use alloy_provider::{Provider, ProviderBuilder};
+use alloy_rpc_types::TransactionRequest;
+use alloy_signer::Signer;
+use alloy_signer_local::PrivateKeySigner;
+use alloy_transport_http::Http;
 use async_trait::async_trait;
-use solver_delivery::{DeliveryError, DeliveryInterface};
 use solver_types::{
 	ConfigSchema, Field, FieldType, Schema, Signature, Transaction as SolverTransaction,
 	TransactionHash, TransactionReceipt,
@@ -24,7 +25,7 @@ use std::sync::Arc;
 /// and confirmation tracking.
 pub struct AlloyDelivery {
 	/// The Alloy provider for blockchain interaction.
-	provider: Arc<dyn Provider<alloy::transports::http::Http<reqwest::Client>> + Send + Sync>,
+	provider: Arc<dyn Provider<Http<reqwest::Client>> + Send + Sync>,
 	/// The chain ID this delivery service is configured for.
 	_chain_id: u64,
 }
@@ -37,7 +38,7 @@ impl AlloyDelivery {
 	pub async fn new(
 		rpc_url: &str,
 		chain_id: u64,
-		mut signer: alloy::signers::local::PrivateKeySigner,
+		mut signer: PrivateKeySigner,
 	) -> Result<Self, DeliveryError> {
 		// Create provider with wallet for automatic signing
 		let url = rpc_url
@@ -47,7 +48,7 @@ impl AlloyDelivery {
 		// Set the chain ID on the signer
 		signer = signer.with_chain_id(Some(chain_id));
 
-		let wallet = alloy::network::EthereumWallet::from(signer);
+		let wallet = EthereumWallet::from(signer);
 
 		let provider = ProviderBuilder::new()
 			.with_recommended_fillers()
@@ -223,8 +224,7 @@ pub fn create_http_delivery(config: &toml::Value) -> Box<dyn DeliveryInterface> 
 		.expect("private_key is required");
 
 	// Parse the private key
-	let signer: alloy::signers::local::PrivateKeySigner =
-		private_key.parse().expect("Invalid private key");
+	let signer: PrivateKeySigner = private_key.parse().expect("Invalid private key");
 
 	// Create delivery service synchronously, but the actual connection happens async
 	let delivery = tokio::task::block_in_place(|| {

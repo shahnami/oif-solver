@@ -12,6 +12,16 @@ use solver_types::{
 use std::collections::HashMap;
 use thiserror::Error;
 
+/// Re-export implementations
+pub mod implementations {
+	pub mod standards {
+		pub mod _7683;
+	}
+	pub mod strategies {
+		pub mod simple;
+	}
+}
+
 /// Errors that can occur during order processing operations.
 #[derive(Debug, Error)]
 pub enum OrderError {

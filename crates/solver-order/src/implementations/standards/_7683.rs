@@ -4,18 +4,15 @@
 //! for EIP-7683 cross-chain orders, including transaction generation for
 //! filling and claiming orders.
 
-use alloy::dyn_abi::DynSolValue;
-use alloy::primitives::{keccak256, FixedBytes, U256};
-use alloy::{
-	sol,
-	sol_types::{SolCall, SolValue},
-};
+use crate::{OrderError, OrderInterface};
+use alloy_dyn_abi::DynSolValue;
+use alloy_primitives::{keccak256, Address as AlloyAddress, FixedBytes, U256};
+use alloy_sol_types::{sol, SolCall, SolValue};
 use async_trait::async_trait;
 use serde::{Deserialize, Serialize};
-use solver_order::{ExecutionStrategy, OrderError, OrderInterface};
 use solver_types::{
-	Address, ConfigSchema, ExecutionContext, ExecutionDecision, ExecutionParams, Field, FieldType,
-	FillProof, Intent, Order, Schema, Transaction,
+	Address, ConfigSchema, ExecutionParams, Field, FieldType, FillProof, Intent, Order, Schema,
+	Transaction,
 };
 
 // Solidity type definitions for EIP-7683 contract interactions.
@@ -362,12 +359,12 @@ impl OrderInterface for Eip7683OrderImpl {
 
 		// Build the order struct
 		let order_struct = DynSolValue::Tuple(vec![
-			DynSolValue::Address(alloy::primitives::Address::from_slice(&user_address)),
+			DynSolValue::Address(AlloyAddress::from_slice(&user_address)),
 			DynSolValue::Uint(U256::from(order_data.nonce), 256),
 			DynSolValue::Uint(U256::from(order_data.origin_chain_id), 256),
 			DynSolValue::Uint(U256::from(order_data.expires as u32), 256),
 			DynSolValue::Uint(U256::from(order_data.fill_deadline as u32), 256),
-			DynSolValue::Address(alloy::primitives::Address::from_slice(&oracle_address)),
+			DynSolValue::Address(AlloyAddress::from_slice(&oracle_address)),
 			DynSolValue::Array(inputs_array),
 			DynSolValue::Array(outputs_array),
 		]);
@@ -407,68 +404,6 @@ impl OrderInterface for Eip7683OrderImpl {
 	}
 }
 
-/// Simple execution strategy that considers gas price limits.
-///
-/// This strategy executes orders when gas prices are below a configured
-/// maximum, deferring execution when prices are too high.
-pub struct SimpleStrategy {
-	/// Maximum gas price the solver is willing to pay.
-	max_gas_price: U256,
-}
-
-impl SimpleStrategy {
-	/// Creates a new SimpleStrategy with the specified maximum gas price in gwei.
-	pub fn new(max_gas_price_gwei: u64) -> Self {
-		Self {
-			max_gas_price: U256::from(max_gas_price_gwei) * U256::from(10u64.pow(9)),
-		}
-	}
-}
-
-/// Configuration schema for SimpleStrategy.
-pub struct SimpleStrategySchema;
-
-impl ConfigSchema for SimpleStrategySchema {
-	fn validate(&self, config: &toml::Value) -> Result<(), solver_types::ValidationError> {
-		let schema = Schema::new(
-			// Required fields
-			vec![],
-			// Optional fields
-			vec![Field::new(
-				"max_gas_price_gwei",
-				FieldType::Integer {
-					min: Some(1),
-					max: None,
-				},
-			)],
-		);
-
-		schema.validate(config)
-	}
-}
-
-#[async_trait]
-impl ExecutionStrategy for SimpleStrategy {
-	fn config_schema(&self) -> Box<dyn ConfigSchema> {
-		Box::new(SimpleStrategySchema)
-	}
-
-	async fn should_execute(
-		&self,
-		_order: &Order,
-		context: &ExecutionContext,
-	) -> ExecutionDecision {
-		if context.gas_price > self.max_gas_price {
-			return ExecutionDecision::Defer(std::time::Duration::from_secs(60));
-		}
-
-		ExecutionDecision::Execute(ExecutionParams {
-			gas_price: context.gas_price,
-			priority_fee: Some(U256::from(2) * U256::from(10u64.pow(9))), // 2 gwei priority
-		})
-	}
-}
-
 /// Factory function to create an EIP-7683 order implementation from configuration.
 ///
 /// Required configuration parameters:
@@ -496,17 +431,4 @@ pub fn create_order_impl(config: &toml::Value) -> Box<dyn OrderInterface> {
 		input_settler.to_string(),
 		solver_address.to_string(),
 	))
-}
-
-/// Factory function to create an execution strategy from configuration.
-///
-/// Configuration parameters:
-/// - `max_gas_price_gwei`: Maximum gas price in gwei (default: 100)
-pub fn create_strategy(config: &toml::Value) -> Box<dyn ExecutionStrategy> {
-	let max_gas_price = config
-		.get("max_gas_price_gwei")
-		.and_then(|v| v.as_integer())
-		.unwrap_or(100) as u64;
-
-	Box::new(SimpleStrategy::new(max_gas_price))
 }

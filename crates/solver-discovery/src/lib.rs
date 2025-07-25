@@ -9,6 +9,14 @@ use solver_types::{ConfigSchema, Intent};
 use thiserror::Error;
 use tokio::sync::mpsc;
 
+/// Re-export implementations
+pub mod implementations {
+	pub mod onchain {
+		pub mod _7683;
+	}
+	pub mod offchain {}
+}
+
 /// Errors that can occur during intent discovery operations.
 #[derive(Debug, Error)]
 pub enum DiscoveryError {

@@ -3,15 +3,13 @@
 //! This module provides concrete implementations of the DiscoveryInterface trait,
 //! currently supporting on-chain EIP-7683 event monitoring using the Alloy library.
 
-use alloy::{
-	primitives::{Address as AlloyAddress, U256},
-	providers::Provider,
-	rpc::types::{Filter, Log},
-	sol,
-	sol_types::SolEvent,
-};
+use crate::{DiscoveryError, DiscoveryInterface};
+use alloy_primitives::{Address as AlloyAddress, Log as PrimLog, LogData, U256};
+use alloy_provider::{Provider, RootProvider};
+use alloy_rpc_types::{Filter, Log};
+use alloy_sol_types::{sol, SolEvent};
+use alloy_transport_http::Http;
 use async_trait::async_trait;
-use solver_discovery::{DiscoveryError, DiscoveryInterface};
 use solver_types::{ConfigSchema, Field, FieldType, Intent, IntentMetadata, Schema};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
@@ -58,7 +56,7 @@ sol! {
 /// orders and converts them into intents for the solver to process.
 pub struct Eip7683Discovery {
 	/// The Alloy provider for blockchain interaction.
-	provider: alloy::providers::RootProvider<alloy::transports::http::Http<reqwest::Client>>,
+	provider: RootProvider<Http<reqwest::Client>>,
 	/// Contract addresses to monitor for Open events.
 	settler_addresses: Vec<AlloyAddress>,
 	/// The last processed block number.
@@ -79,7 +77,7 @@ impl Eip7683Discovery {
 		settler_addresses: Vec<String>,
 	) -> Result<Self, DiscoveryError> {
 		// Create provider
-		let provider = alloy::providers::RootProvider::new_http(
+		let provider = RootProvider::new_http(
 			rpc_url
 				.parse()
 				.map_err(|e| DiscoveryError::Connection(format!("Invalid RPC URL: {}", e)))?,
@@ -117,12 +115,9 @@ impl Eip7683Discovery {
 	/// Intent format used by the solver.
 	async fn parse_open_event(&self, log: &Log) -> Result<Intent, DiscoveryError> {
 		// Convert RPC log to primitives log for decoding
-		let prim_log = alloy::primitives::Log {
+		let prim_log = PrimLog {
 			address: log.address(),
-			data: alloy::primitives::LogData::new_unchecked(
-				log.topics().to_vec(),
-				log.data().data.clone(),
-			),
+			data: LogData::new_unchecked(log.topics().to_vec(), log.data().data.clone()),
 		};
 
 		// Decode the Open event
@@ -194,7 +189,7 @@ impl Eip7683Discovery {
 	/// Polls the blockchain for new Open events and sends discovered
 	/// intents through the provided channel.
 	async fn monitoring_loop(
-		provider: alloy::providers::RootProvider<alloy::transports::http::Http<reqwest::Client>>,
+		provider: RootProvider<Http<reqwest::Client>>,
 		settler_addresses: Vec<AlloyAddress>,
 		last_block: Arc<Mutex<u64>>,
 		sender: mpsc::UnboundedSender<Intent>,
