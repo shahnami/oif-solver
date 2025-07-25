@@ -1,6 +1,17 @@
 [workspace]
 resolver = "2"
-members = ["crates/*"]
+members = [
+    "crates/solver-types",
+    "crates/solver-core",
+    "crates/solver-config",
+    "crates/solver-storage",
+    "crates/solver-account",
+    "crates/solver-delivery",
+    "crates/solver-discovery",
+    "crates/solver-order",
+    "crates/solver-settlement",
+    "crates/solver-service",
+]
 default-members = ["crates/solver-service"]
 
 [workspace.package]

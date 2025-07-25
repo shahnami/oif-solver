@@ -1,0 +1,29 @@
+[package]
+name = "solver-config"
+version.workspace = true
+edition.workspace = true
+authors.workspace = true
+license.workspace = true
+repository.workspace = true
+
+[dependencies]
+# Internal dependencies
+solver-types = { path = "../solver-types" }
+
+# Serialization
+serde.workspace = true
+serde_json.workspace = true
+toml.workspace = true
+
+# Async runtime
+tokio.workspace = true
+
+# Error handling
+thiserror.workspace = true
+anyhow.workspace = true
+
+# Utilities
+regex = "1.10"
+
+[dev-dependencies]
+tempfile.workspace = true

@@ -1,28 +1,9 @@
 [package]
 name = "solver-settlement"
-version.workspace = true
-edition.workspace = true
-authors.workspace = true
-license.workspace = true
-repository.workspace = true
+version = "0.1.0"
+edition = "2021"
 
 [dependencies]
-# Internal dependencies
 solver-types = { path = "../solver-types" }
-
-# Async runtime
-tokio.workspace = true
-async-trait.workspace = true
-futures.workspace = true
-
-# Logging
-tracing.workspace = true
-
-# Common utilities
-uuid.workspace = true
-bytes.workspace = true
-chrono.workspace = true
-
-# Error handling
-thiserror.workspace = true
-anyhow.workspace = true
+async-trait = "0.1"
+thiserror = "1.0"

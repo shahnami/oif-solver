@@ -1,27 +1,12 @@
 [package]
 name = "solver-delivery"
-version.workspace = true
-edition.workspace = true
-authors.workspace = true
-license.workspace = true
-repository.workspace = true
+version = "0.1.0"
+edition = "2021"
 
 [dependencies]
-# Internal dependencies
 solver-types = { path = "../solver-types" }
-
-# Async runtime
-tokio.workspace = true
-async-trait.workspace = true
-futures.workspace = true
-
-# Logging
-tracing.workspace = true
-
-# Common utilities
-uuid.workspace = true
-bytes.workspace = true
-
-# Error handling
-thiserror.workspace = true
-anyhow.workspace = true
+async-trait = "0.1"
+solver-account = { path = "../solver-account" }
+serde = { version = "1.0", features = ["derive"] }
+thiserror = "1.0"
+log = "0.4"
