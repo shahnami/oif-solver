@@ -12,7 +12,7 @@ use actix_web::{
 };
 use solver_config::ApiConfig;
 use solver_core::SolverEngine;
-use solver_types::{ErrorResponse, GetQuoteRequest};
+// use solver_types::{ErrorResponse, GetQuoteRequest};
 use std::sync::Arc;
 use tracing::{info, warn};
 
@@ -61,20 +61,20 @@ pub async fn start_server(
 ///
 /// This endpoint processes quote requests and returns price estimates
 /// for cross-chain intents following the ERC-7683 standard.
-async fn handle_quote(
-    app_state: Data<AppState>,
-    request: Json<GetQuoteRequest>,
-) -> ActixResult<HttpResponse> {
-    match crate::apis::quote::process_quote_request(request.into_inner(), &app_state.solver).await {
-        Ok(response) => Ok(HttpResponse::Ok().json(response)),
-        Err(e) => {
-            warn!("Quote request failed: {}", e);
-            Ok(HttpResponse::BadRequest().json(ErrorResponse {
-                error: "QUOTE_ERROR".to_string(),
-                message: e.to_string(),
-                details: None,
-                retry_after: None,
-            }))
-        }
-    }
-} 
+// async fn handle_quote(
+//     app_state: Data<AppState>,
+//     request: Json<GetQuoteRequest>,
+// ) -> ActixResult<HttpResponse> {
+//     match crate::apis::quote::process_quote_request(request.into_inner(), &app_state.solver).await {
+//         Ok(response) => Ok(HttpResponse::Ok().json(response)),
+//         Err(e) => {
+//             warn!("Quote request failed: {}", e);
+//             Ok(HttpResponse::BadRequest().json(ErrorResponse {
+//                 error: "QUOTE_ERROR".to_string(),
+//                 message: e.to_string(),
+//                 details: None,
+//                 retry_after: None,
+//             }))
+//         }
+//     }
+// } 
