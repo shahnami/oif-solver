@@ -18,6 +18,16 @@ use solver_types::{
 };
 use std::sync::Arc;
 
+/// Utility function to truncate a transaction hash for display.
+fn truncate_hash(hash: &TransactionHash) -> String {
+	let hash_str = hex::encode(&hash.0);
+	if hash_str.len() <= 8 {
+		hash_str
+	} else {
+		format!("{}..", &hash_str[..8])
+	}
+}
+
 /// Alloy-based EVM delivery implementation.
 ///
 /// This implementation uses the Alloy library to submit and monitor transactions
@@ -148,35 +158,76 @@ impl DeliveryInterface for AlloyDelivery {
 	) -> Result<TransactionReceipt, DeliveryError> {
 		let tx_hash = FixedBytes::<32>::from_slice(&hash.0);
 
-		// Get transaction receipt
-		let receipt = self
-			.provider
-			.get_transaction_receipt(tx_hash)
-			.await
-			.map_err(|e| DeliveryError::Network(format!("Failed to get receipt: {}", e)))?
-			.ok_or_else(|| DeliveryError::Network("Transaction not found".to_string()))?;
+		// Poll interval for checking confirmations
+		let poll_interval = tokio::time::Duration::from_secs(10);
+		// Allow ~15 seconds per confirmation (typical block time) plus some buffer
+		let seconds_per_confirmation = 20;
+		let max_timeout = 3600; // Cap at 1 hour
+		let timeout_seconds = (confirmations * seconds_per_confirmation)
+			.max(seconds_per_confirmation)
+			.min(max_timeout);
+		let max_wait_time = tokio::time::Duration::from_secs(timeout_seconds);
+		let start_time = tokio::time::Instant::now();
 
-		let current_block =
-			self.provider.get_block_number().await.map_err(|e| {
+		// Log high-level info about what we're doing
+		tracing::info!(
+			tx_hash = %truncate_hash(hash),
+			"Waiting for {} confirmations (timeout: {}s)",
+			confirmations,
+			timeout_seconds
+		);
+
+		loop {
+			// Check if we've exceeded max wait time
+			if start_time.elapsed() > max_wait_time {
+				return Err(DeliveryError::Network(format!(
+					"Timeout waiting for {} confirmations after {} seconds",
+					confirmations,
+					max_wait_time.as_secs()
+				)));
+			}
+
+			// Get transaction receipt
+			let receipt = match self.provider.get_transaction_receipt(tx_hash).await {
+				Ok(Some(receipt)) => receipt,
+				Ok(None) => {
+					// Transaction not yet mined, wait and retry
+					tokio::time::sleep(poll_interval).await;
+					continue;
+				}
+				Err(e) => {
+					return Err(DeliveryError::Network(format!(
+						"Failed to get receipt: {}",
+						e
+					)));
+				}
+			};
+
+			// Get current block number
+			let current_block = self.provider.get_block_number().await.map_err(|e| {
 				DeliveryError::Network(format!("Failed to get block number: {}", e))
 			})?;
 
-		let tx_block = receipt.block_number.unwrap_or(0);
-		let current_confirmations = current_block.saturating_sub(tx_block);
+			let tx_block = receipt.block_number.unwrap_or(0);
+			let current_confirmations = current_block.saturating_sub(tx_block);
 
-		if current_confirmations < confirmations {
-			// In production, would poll until enough confirmations
-			return Err(DeliveryError::Network(format!(
-				"Insufficient confirmations: {} < {}",
-				current_confirmations, confirmations
-			)));
+			// Check if we have enough confirmations
+			if current_confirmations >= confirmations {
+				return Ok(TransactionReceipt {
+					hash: TransactionHash(receipt.transaction_hash.0.to_vec()),
+					block_number: tx_block,
+					success: receipt.status(),
+				});
+			}
+
+			tracing::debug!(
+				"Waiting for {} more confirmations...",
+				confirmations.saturating_sub(current_confirmations)
+			);
+
+			// Not enough confirmations yet, wait and retry
+			tokio::time::sleep(poll_interval).await;
 		}
-
-		Ok(TransactionReceipt {
-			hash: TransactionHash(receipt.transaction_hash.0.to_vec()),
-			block_number: tx_block,
-			success: receipt.status(),
-		})
 	}
 
 	async fn get_receipt(

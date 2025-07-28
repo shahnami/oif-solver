@@ -195,7 +195,8 @@ impl Eip7683Discovery {
 		sender: mpsc::UnboundedSender<Intent>,
 		mut stop_rx: mpsc::Receiver<()>,
 	) {
-		let mut interval = tokio::time::interval(std::time::Duration::from_secs(12));
+		// TODO: make this configurable
+		let mut interval = tokio::time::interval(std::time::Duration::from_secs(3));
 
 		loop {
 			tokio::select! {

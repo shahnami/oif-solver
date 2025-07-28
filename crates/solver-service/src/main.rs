@@ -8,7 +8,6 @@ use clap::Parser;
 use solver_config::Config;
 use solver_core::{SolverBuilder, SolverEngine};
 use std::path::PathBuf;
-use tracing::Level;
 
 // Import implementations from individual crates
 use solver_account::implementations::local::create_account;
@@ -45,18 +44,16 @@ struct Args {
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
 	let args = Args::parse();
 
-	// Initialize tracing
-	let log_level = match args.log_level.to_lowercase().as_str() {
-		"trace" => Level::TRACE,
-		"debug" => Level::DEBUG,
-		"info" => Level::INFO,
-		"warn" => Level::WARN,
-		"error" => Level::ERROR,
-		_ => Level::INFO,
-	};
+	// Initialize tracing with env filter
+	use tracing_subscriber::{fmt, EnvFilter};
 
-	tracing_subscriber::fmt()
-		.with_max_level(log_level)
+	// Create env filter with default from args
+	let default_directive = args.log_level.to_string();
+	let env_filter =
+		EnvFilter::try_from_default_env().unwrap_or_else(|_| EnvFilter::new(default_directive));
+
+	fmt()
+		.with_env_filter(env_filter)
 		.with_thread_ids(true)
 		.with_target(true)
 		.init();

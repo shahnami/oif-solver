@@ -210,8 +210,11 @@ cargo build
 # Run tests
 cargo test
 
-# Run the solver service
-cargo run -- --config config/example.toml --log-level debug
+# Run the solver service with info logs
+cargo run -- --config config/example.toml
+
+# Run with debug logs for solver modules only
+RUST_LOG=solver_core=debug,solver_delivery=debug,info cargo run -- --config config/example.toml
 ```
 
 ## Configuration
@@ -269,27 +272,36 @@ cargo run -- --config path/to/your/config.toml
 CONFIG_FILE=path/to/your/config.toml cargo run
 ```
 
-### Log Levels
+### Logging Configuration
+
+The solver uses the `RUST_LOG` environment variable for fine-grained logging control. You can specify different log levels for different modules:
+
+```bash
+# Show debug logs for solver modules only
+RUST_LOG=solver_core=debug,solver_delivery=debug,info cargo run -- --config config/demo.toml
+
+# Reduce noise from external crates
+RUST_LOG=info,hyper=warn,alloy_provider=warn cargo run -- --config config/demo.toml
+
+# Debug specific modules
+RUST_LOG=solver_core=debug,solver_delivery=info,alloy=warn,hyper=warn cargo run -- --config config/demo.toml
+
+# Show all debug logs (very verbose)
+RUST_LOG=debug cargo run -- --config config/demo.toml
+```
 
 Available log levels (from most to least verbose):
-
 * `trace` - Very detailed debugging information
 * `debug` - Debugging information
 * `info` - General information (default)
 * `warn` - Warning messages
 * `error` - Error messages only
 
-Set the log level using:
+The `--log-level` flag acts as a fallback when `RUST_LOG` is not set:
 
 ```bash
-# Command line flag
-cargo run -- --log-level debug
-
-# Short form
-cargo run -- -l debug
-
-# Environment variable
-LOG_LEVEL=debug cargo run
+# Uses info level for all modules when RUST_LOG is not set
+cargo run -- --config config/demo.toml --log-level info
 ```
 
 ## Running the Demo
@@ -320,9 +332,9 @@ This script will:
    * Destination chain (ID: 31338) on port 8546
 2. Deploy test tokens on both chains
 3. Deploy settler contracts (InputSettler, OutputSettler)
-4. Deploy TheCompact contract for escrow
-5. Create a `config/local.toml` configuration file
-6. Fund test accounts with tokens
+4. Create a `config/demo.toml` configuration file
+5. Fund test accounts with tokens
+6. Approves token spend for settler contracts
 
 ### Step 2: Start the Solver Service
 
@@ -333,7 +345,10 @@ In a new terminal, build and run the solver:
 cargo build
 
 # Run the solver with local configuration
-cargo run --bin solver-service -- --config config/local.toml --log-level debug
+cargo run --bin solver -- --config config/demo.toml
+
+# Or with debug logs for debugging
+RUST_LOG=solver_core=debug,solver_delivery=info,info cargo run --bin solver -- --config config/demo.toml
 ```
 
 The solver will:
@@ -401,17 +416,6 @@ cargo test --all
 # Run tests with output
 cargo test --all -- --nocapture
 ```
-
-### Code Structure
-
-The codebase follows these conventions:
-
-* Each crate has a focused responsibility
-* Traits define interfaces between crates
-* Types are shared through the `solver-types` crate
-* Error handling uses the `Result` type with custom error variants
-* Async runtime is Tokio
-* Logging uses the `tracing` crate
 
 ## License
 

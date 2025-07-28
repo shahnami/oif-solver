@@ -21,8 +21,6 @@ pub struct DirectSettlement {
 	provider: RootProvider<Http<reqwest::Client>>,
 	/// Oracle address for attestation verification.
 	oracle_address: String,
-	/// Minimum confirmations required for fill validation.
-	min_confirmations: u32,
 	/// Dispute period duration in seconds.
 	dispute_period_seconds: u64,
 }
@@ -39,12 +37,11 @@ struct Eip7683OrderData {
 impl DirectSettlement {
 	/// Creates a new DirectSettlement instance.
 	///
-	/// Configures settlement validation with the specified oracle address,
-	/// confirmation requirements, and dispute period.
+	/// Configures settlement validation with the specified oracle address
+	/// and dispute period.
 	pub async fn new(
 		rpc_url: &str,
 		oracle_address: String,
-		min_confirmations: u32,
 		dispute_period_seconds: u64,
 	) -> Result<Self, SettlementError> {
 		// Create provider
@@ -61,7 +58,6 @@ impl DirectSettlement {
 		Ok(Self {
 			provider,
 			oracle_address: oracle.to_string(),
-			min_confirmations,
 			dispute_period_seconds,
 		})
 	}
@@ -92,22 +88,13 @@ impl ConfigSchema for DirectSettlementSchema {
 				}),
 			],
 			// Optional fields
-			vec![
-				Field::new(
-					"min_confirmations",
-					FieldType::Integer {
-						min: Some(1),
-						max: Some(100),
-					},
-				),
-				Field::new(
-					"dispute_period_seconds",
-					FieldType::Integer {
-						min: Some(0),
-						max: Some(86400),
-					},
-				),
-			],
+			vec![Field::new(
+				"dispute_period_seconds",
+				FieldType::Integer {
+					min: Some(0),
+					max: Some(86400),
+				},
+			)],
 		);
 
 		schema.validate(config)
@@ -122,8 +109,8 @@ impl SettlementInterface for DirectSettlement {
 
 	/// Validates a fill transaction and generates a fill proof.
 	///
-	/// Checks that the transaction was successful, has sufficient confirmations,
-	/// and extracts necessary data for claim generation.
+	/// Since the transaction is already confirmed by the delivery service,
+	/// this method just extracts necessary data for claim generation.
 	async fn validate_fill(
 		&self,
 		order: &Order,
@@ -151,20 +138,7 @@ impl SettlementInterface for DirectSettlement {
 			));
 		}
 
-		// Check confirmations
-		let current_block = self.provider.get_block_number().await.map_err(|e| {
-			SettlementError::ValidationFailed(format!("Failed to get block number: {}", e))
-		})?;
-
 		let tx_block = receipt.block_number.unwrap_or(0);
-		let confirmations = current_block.saturating_sub(tx_block);
-
-		if confirmations < self.min_confirmations as u64 {
-			return Err(SettlementError::ValidationFailed(format!(
-				"Insufficient confirmations: {} < {}",
-				confirmations, self.min_confirmations
-			)));
-		}
 
 		// Parse order data to get order ID
 		let order_data: Eip7683OrderData =
@@ -172,9 +146,9 @@ impl SettlementInterface for DirectSettlement {
 				SettlementError::ValidationFailed(format!("Failed to parse order data: {}", e))
 			})?;
 
-		// In production, would parse logs to find the fill event
+		// TODO: parse logs to find the fill event
 		// and extract attestation data from oracle
-		// For now, create a simple proof
+		// For now, we use a simple proof
 
 		// Get the block timestamp
 		let block = self
@@ -229,7 +203,7 @@ impl SettlementInterface for DirectSettlement {
 			return false; // Still in dispute period
 		}
 
-		// In production, would also check:
+		// TODO check:
 		// 1. Oracle attestation exists
 		// 2. No disputes were raised
 		// 3. Claim window hasn't expired
@@ -247,7 +221,6 @@ impl SettlementInterface for DirectSettlement {
 /// - `oracle_address`: Address of the attestation oracle
 ///
 /// Optional configuration parameters:
-/// - `min_confirmations`: Minimum confirmations required (default: 1)
 /// - `dispute_period_seconds`: Dispute period duration (default: 300)
 pub fn create_settlement(config: &toml::Value) -> Box<dyn SettlementInterface> {
 	let rpc_url = config
@@ -260,11 +233,6 @@ pub fn create_settlement(config: &toml::Value) -> Box<dyn SettlementInterface> {
 		.and_then(|v| v.as_str())
 		.expect("oracle_address is required");
 
-	let min_confirmations = config
-		.get("min_confirmations")
-		.and_then(|v| v.as_integer())
-		.unwrap_or(1) as u32;
-
 	let dispute_period_seconds = config
 		.get("dispute_period_seconds")
 		.and_then(|v| v.as_integer())
@@ -273,13 +241,7 @@ pub fn create_settlement(config: &toml::Value) -> Box<dyn SettlementInterface> {
 	// Create settlement service synchronously
 	let settlement = tokio::task::block_in_place(|| {
 		tokio::runtime::Handle::current().block_on(async {
-			DirectSettlement::new(
-				rpc_url,
-				oracle_address.to_string(),
-				min_confirmations,
-				dispute_period_seconds,
-			)
-			.await
+			DirectSettlement::new(rpc_url, oracle_address.to_string(), dispute_period_seconds).await
 		})
 	});
 

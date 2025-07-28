@@ -367,7 +367,7 @@ create_config() {
     
     mkdir -p config
     
-    cat > config/example.toml << EOF
+    cat > config/demo.toml << EOF
 # OIF Solver Configuration - Local Dual-Chain Setup
 
 [solver]
@@ -431,14 +431,13 @@ max_gas_price_gwei = 100  # Maximum gas price in gwei
 rpc_url = "$DEST_RPC_URL"  # Settlement needs to validate fills on destination chain
 # Oracle address on origin chain
 oracle_address = "$ORACLE_ADDRESS"
-min_confirmations = 1
 dispute_period_seconds = 1  # 1 seconds for testing
 
 # ============================================================================
 # DEMO SCRIPT CONFIGURATION
 # The following sections are used by demo scripts (send_intent.sh, etc.)
 # and are NOT required by the solver itself. The solver only needs the
-# plugin configurations above.
+# configurations above.
 # ============================================================================
 
 # Contract addresses for testing (used by demo scripts)
@@ -475,7 +474,7 @@ RUST_LOG=info
 EOF
 
     echo -e "${GREEN}✅ Dual-chain configuration created${NC}"
-    echo -e "   Config: config/example.toml"
+    echo -e "   Config: config/demo.toml"
     echo -e "   Environment: .env"
 }
 
@@ -505,7 +504,7 @@ show_summary() {
     echo -e "   User:    $USER_ADDR (100 TEST + 10,000 ETH each chain)"
     echo ""
     echo -e "${YELLOW}📚 Next Steps:${NC}"
-    echo -e "   1. Start solver: ${BLUE}cargo run --bin solver-service -- --config config/example.toml${NC}"
+    echo -e "   1. Start solver: ${BLUE}cargo run --bin solver-service -- --config config/demo.toml${NC}"
     echo -e "   2. Send intent:  ${BLUE}./send_intent.sh${NC} (will create cross-chain order)"
     echo -e "   3. Monitor:      ${BLUE}./monitor_api.sh${NC}"
     echo ""
@@ -590,7 +589,7 @@ case "${1:-setup}" in
             echo -e "${RED}❌ Destination Anvil is not running${NC}"
         fi
         
-        if [ "$origin_running" = true ] && [ "$dest_running" = true ] && [ -f config/example.toml ]; then
+        if [ "$origin_running" = true ] && [ "$dest_running" = true ] && [ -f config/demo.toml ]; then
             show_summary
         fi
         ;;
