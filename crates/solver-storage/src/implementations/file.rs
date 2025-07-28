@@ -72,8 +72,7 @@ impl StorageInterface for FileStorage {
 			.await
 			.map_err(|e| StorageError::Backend(e.to_string()))?;
 
-		// Note: TTL is ignored in this simple implementation
-		// In production, you might store metadata separately
+		// TODO: TTL is ignored in this simple implementation
 
 		Ok(())
 	}

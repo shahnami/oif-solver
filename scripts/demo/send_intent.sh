@@ -27,7 +27,7 @@ if ! command -v cast &> /dev/null; then
 fi
 
 # Check if config exists
-if [ ! -f "config/example.toml" ]; then
+if [ ! -f "config/demo.toml" ]; then
     echo -e "${RED}❌ Configuration not found!${NC}"
     echo -e "${YELLOW}💡 Run './setup_local_anvil.sh' first${NC}"
     exit 1
@@ -35,19 +35,19 @@ fi
 
 # Extract contract addresses from config - new format
 # Parse the order section
-INPUT_SETTLER_ADDRESS=$(grep 'input_settler_address = ' config/example.toml | cut -d'"' -f2)
-OUTPUT_SETTLER_ADDRESS=$(grep 'output_settler_address = ' config/example.toml | cut -d'"' -f2)
-SOLVER_ADDR=$(grep 'solver_address = ' config/example.toml | cut -d'"' -f2)
+INPUT_SETTLER_ADDRESS=$(grep 'input_settler_address = ' config/demo.toml | cut -d'"' -f2)
+OUTPUT_SETTLER_ADDRESS=$(grep 'output_settler_address = ' config/demo.toml | cut -d'"' -f2)
+SOLVER_ADDR=$(grep 'solver_address = ' config/demo.toml | cut -d'"' -f2)
 
 # Parse the settlement section
-ORACLE_ADDRESS=$(grep 'oracle_address = ' config/example.toml | cut -d'"' -f2)
+ORACLE_ADDRESS=$(grep 'oracle_address = ' config/demo.toml | cut -d'"' -f2)
 
 # Parse the demo configuration section
-ORIGIN_TOKEN_ADDRESS=$(grep -A 10 '\[contracts.origin\]' config/example.toml | grep 'token = ' | cut -d'"' -f2)
-DEST_TOKEN_ADDRESS=$(grep -A 10 '\[contracts.destination\]' config/example.toml | grep 'token = ' | cut -d'"' -f2)
-USER_ADDR=$(grep -A 10 '\[accounts\]' config/example.toml | grep 'user = ' | cut -d'"' -f2)
-USER_PRIVATE_KEY=$(grep -A 10 '\[accounts\]' config/example.toml | grep 'user_private_key = ' | cut -d'"' -f2)
-RECIPIENT_ADDR=$(grep -A 10 '\[accounts\]' config/example.toml | grep 'recipient = ' | cut -d'"' -f2)
+ORIGIN_TOKEN_ADDRESS=$(grep -A 10 '\[contracts.origin\]' config/demo.toml | grep 'token = ' | cut -d'"' -f2)
+DEST_TOKEN_ADDRESS=$(grep -A 10 '\[contracts.destination\]' config/demo.toml | grep 'token = ' | cut -d'"' -f2)
+USER_ADDR=$(grep -A 10 '\[accounts\]' config/demo.toml | grep 'user = ' | cut -d'"' -f2)
+USER_PRIVATE_KEY=$(grep -A 10 '\[accounts\]' config/demo.toml | grep 'user_private_key = ' | cut -d'"' -f2)
+RECIPIENT_ADDR=$(grep -A 10 '\[accounts\]' config/demo.toml | grep 'recipient = ' | cut -d'"' -f2)
 
 # Configuration
 ORIGIN_RPC_URL="http://localhost:8545"
@@ -71,7 +71,7 @@ if [ "$DEBUG" = "1" ]; then
     echo -e "   RPC_URL: $RPC_URL"
     echo -e "   ORIGIN_TOKEN_ADDRESS length: ${#ORIGIN_TOKEN_ADDRESS}"
     echo -e "   USER_ADDR length: ${#USER_ADDR}"
-    echo -e "   Config file exists: $([ -f "config/example.toml" ] && echo "Yes" || echo "No")"
+    echo -e "   Config file exists: $([ -f "config/demo.toml" ] && echo "Yes" || echo "No")"
 fi
 
 # Function to check balances
@@ -439,7 +439,7 @@ case "${1:-send}" in
         main
         ;;
     "balances")
-        if [ -f "config/example.toml" ]; then
+        if [ -f "config/demo.toml" ]; then
             # Check required commands first
             if ! command -v bc &> /dev/null; then
                 echo -e "${RED}❌ 'bc' command not found!${NC}"
@@ -448,15 +448,15 @@ case "${1:-send}" in
             fi
             
             # Parse the order section
-            INPUT_SETTLER_ADDRESS=$(grep 'input_settler_address = ' config/example.toml | cut -d'"' -f2)
-            OUTPUT_SETTLER_ADDRESS=$(grep 'output_settler_address = ' config/example.toml | cut -d'"' -f2)
-            SOLVER_ADDR=$(grep 'solver_address = ' config/example.toml | cut -d'"' -f2)
+            INPUT_SETTLER_ADDRESS=$(grep 'input_settler_address = ' config/demo.toml | cut -d'"' -f2)
+            OUTPUT_SETTLER_ADDRESS=$(grep 'output_settler_address = ' config/demo.toml | cut -d'"' -f2)
+            SOLVER_ADDR=$(grep 'solver_address = ' config/demo.toml | cut -d'"' -f2)
             
             # Parse the demo configuration section
-            ORIGIN_TOKEN_ADDRESS=$(grep -A 10 '\[contracts.origin\]' config/example.toml | grep 'token = ' | cut -d'"' -f2)
-            DEST_TOKEN_ADDRESS=$(grep -A 10 '\[contracts.destination\]' config/example.toml | grep 'token = ' | cut -d'"' -f2)
-            USER_ADDR=$(grep -A 10 '\[accounts\]' config/example.toml | grep 'user = ' | cut -d'"' -f2)
-            RECIPIENT_ADDR=$(grep -A 10 '\[accounts\]' config/example.toml | grep 'recipient = ' | cut -d'"' -f2)
+            ORIGIN_TOKEN_ADDRESS=$(grep -A 10 '\[contracts.origin\]' config/demo.toml | grep 'token = ' | cut -d'"' -f2)
+            DEST_TOKEN_ADDRESS=$(grep -A 10 '\[contracts.destination\]' config/demo.toml | grep 'token = ' | cut -d'"' -f2)
+            USER_ADDR=$(grep -A 10 '\[accounts\]' config/demo.toml | grep 'user = ' | cut -d'"' -f2)
+            RECIPIENT_ADDR=$(grep -A 10 '\[accounts\]' config/demo.toml | grep 'recipient = ' | cut -d'"' -f2)
             ORIGIN_RPC_URL="http://localhost:8545"
             DEST_RPC_URL="http://localhost:8546"
             show_balances
@@ -465,7 +465,7 @@ case "${1:-send}" in
         fi
         ;;
     "approve")
-        if [ -f "config/example.toml" ]; then
+        if [ -f "config/demo.toml" ]; then
             # Check required commands first
             if ! command -v bc &> /dev/null; then
                 echo -e "${RED}❌ 'bc' command not found!${NC}"
@@ -474,12 +474,12 @@ case "${1:-send}" in
             fi
             
             # Parse the order section
-            INPUT_SETTLER_ADDRESS=$(grep 'input_settler_address = ' config/example.toml | cut -d'"' -f2)
+            INPUT_SETTLER_ADDRESS=$(grep 'input_settler_address = ' config/demo.toml | cut -d'"' -f2)
             
             # Parse the demo configuration section
-            ORIGIN_TOKEN_ADDRESS=$(grep -A 10 '\[contracts.origin\]' config/example.toml | grep 'token = ' | cut -d'"' -f2)
-            USER_ADDR=$(grep -A 10 '\[accounts\]' config/example.toml | grep 'user = ' | cut -d'"' -f2)
-            USER_PRIVATE_KEY=$(grep -A 10 '\[accounts\]' config/example.toml | grep 'user_private_key = ' | cut -d'"' -f2)
+            ORIGIN_TOKEN_ADDRESS=$(grep -A 10 '\[contracts.origin\]' config/demo.toml | grep 'token = ' | cut -d'"' -f2)
+            USER_ADDR=$(grep -A 10 '\[accounts\]' config/demo.toml | grep 'user = ' | cut -d'"' -f2)
+            USER_PRIVATE_KEY=$(grep -A 10 '\[accounts\]' config/demo.toml | grep 'user_private_key = ' | cut -d'"' -f2)
             RPC_URL="http://localhost:8545"
             AMOUNT="1000000000000000000"  # 1 token
             approve_tokens

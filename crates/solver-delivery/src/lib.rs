@@ -132,26 +132,33 @@ impl DeliveryService {
 
 	/// Waits for a transaction to be confirmed with the specified number of confirmations.
 	///
-	/// This method tries all available providers until one recognizes the transaction,
-	/// as the transaction hash alone doesn't indicate which chain it belongs to.
+	/// This method first checks which provider has the transaction, then waits for confirmations
+	/// on that specific provider to avoid timeout issues.
 	pub async fn confirm(
 		&self,
 		hash: &TransactionHash,
 		confirmations: u64,
 	) -> Result<TransactionReceipt, DeliveryError> {
-		// Try all providers until one recognizes the transaction
-		for (_chain_id, provider) in self.providers.iter() {
-			match provider.wait_for_confirmation(hash, confirmations).await {
-				Ok(receipt) => {
-					return Ok(receipt);
+		// First, quickly check which provider has the transaction
+		let mut provider_with_tx = None;
+
+		for (chain_id, provider) in self.providers.iter() {
+			// Just check if the transaction exists, don't wait for confirmations yet
+			match provider.get_receipt(hash).await {
+				Ok(_) => {
+					provider_with_tx = Some((*chain_id, provider));
+					break;
 				}
-				Err(_) => {
-					continue;
-				}
+				Err(_) => continue,
 			}
 		}
 
-		Err(DeliveryError::NoProviderAvailable)
+		// If we found a provider with the transaction, wait for confirmations
+		if let Some((_chain_id, provider)) = provider_with_tx {
+			provider.wait_for_confirmation(hash, confirmations).await
+		} else {
+			Err(DeliveryError::NoProviderAvailable)
+		}
 	}
 
 	/// Waits for a transaction to be confirmed with the default number of confirmations.

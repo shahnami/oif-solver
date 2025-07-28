@@ -8,7 +8,7 @@
 use alloy_primitives::{hex, U256};
 use solver_account::AccountService;
 use solver_config::Config;
-use solver_delivery::DeliveryService;
+use solver_delivery::{DeliveryError, DeliveryService};
 use solver_discovery::DiscoveryService;
 use solver_order::OrderService;
 use solver_settlement::SettlementService;
@@ -281,13 +281,20 @@ impl SolverEngine {
 
 		tokio::spawn(async move {
 			let monitoring_timeout = tokio::time::Duration::from_secs(timeout_minutes * 60);
-			let poll_interval = tokio::time::Duration::from_secs(5); // Poll every 5 seconds for faster confirmation
+			let poll_interval = tokio::time::Duration::from_secs(3); // Poll every 3 seconds for faster confirmation
 
 			let start_time = tokio::time::Instant::now();
 
 			loop {
 				// Check if we've exceeded the timeout
 				if start_time.elapsed() > monitoring_timeout {
+					tracing::warn!(
+						order_id = %truncate_id(&order_id),
+						tx_hash = %truncate_id(&hex::encode(&tx_hash.0)),
+						tx_type = ?tx_type,
+						"Transaction monitoring timeout reached after {} minutes",
+						timeout_minutes
+					);
 					break;
 				}
 
@@ -296,25 +303,36 @@ impl SolverEngine {
 					Ok(true) => {
 						// Transaction is confirmed and successful
 						// Get the full receipt for the event
-						if let Ok(receipt) = delivery.confirm_with_default(&tx_hash).await {
-							tracing::info!(
-								order_id = %truncate_id(&order_id),
-								tx_hash = %truncate_id(&hex::encode(&tx_hash.0)),
-								"Confirmed {}",
-								match tx_type {
-									TransactionType::Fill => "fill",
-									TransactionType::Claim => "claim",
-								}
-							);
-							event_bus
-								.publish(SolverEvent::Delivery(
-									DeliveryEvent::TransactionConfirmed {
-										tx_hash: tx_hash.clone(),
-										receipt,
-										tx_type,
-									},
-								))
-								.ok();
+						match delivery.confirm_with_default(&tx_hash).await {
+							Ok(receipt) => {
+								tracing::info!(
+									order_id = %truncate_id(&order_id),
+									tx_hash = %truncate_id(&hex::encode(&tx_hash.0)),
+									"Confirmed {}",
+									match tx_type {
+										TransactionType::Fill => "fill",
+										TransactionType::Claim => "claim",
+									}
+								);
+								event_bus
+									.publish(SolverEvent::Delivery(
+										DeliveryEvent::TransactionConfirmed {
+											tx_hash: tx_hash.clone(),
+											receipt,
+											tx_type,
+										},
+									))
+									.ok();
+							}
+							Err(e) => {
+								tracing::error!(
+									order_id = %truncate_id(&order_id),
+									tx_hash = %truncate_id(&hex::encode(&tx_hash.0)),
+									tx_type = ?tx_type,
+									error = %e,
+									"Failed to wait for confirmations"
+								);
+							}
 						}
 						break;
 					}
@@ -328,12 +346,28 @@ impl SolverEngine {
 							.ok();
 						break;
 					}
-					Err(_) => {
+					Err(e) => {
 						// Transaction not yet confirmed or error
+						// Show user-friendly message for common cases
+						let message = match e {
+							DeliveryError::NoProviderAvailable => {
+								"Waiting for transaction to be mined"
+							}
+							_ => "Checking transaction status",
+						};
+
+						// Always log at info level so users see progress
+						tracing::info!(
+							order_id = %truncate_id(&order_id),
+							tx_hash = %truncate_id(&hex::encode(&tx_hash.0)),
+							tx_type = ?tx_type,
+							elapsed_secs = start_time.elapsed().as_secs(),
+							"{}",
+							message
+						);
 					}
 				}
 
-				// Wait before next poll
 				tokio::time::sleep(poll_interval).await;
 			}
 		});
@@ -380,9 +414,8 @@ impl SolverEngine {
 	/// Handles confirmed fill transactions.
 	///
 	/// This method:
-	/// 1. Validates the fill and extracts proof
-	/// 2. Stores the fill proof for later claiming
-	/// 3. Spawns a monitoring task to check when the order can be claimed
+	/// 1. Looks up the order associated with the transaction
+	/// 2. Spawns a task to validate the fill and monitor claim readiness
 	async fn handle_fill_confirmed(
 		&self,
 		tx_hash: solver_types::TransactionHash,
@@ -408,36 +441,36 @@ impl SolverEngine {
 			}
 		};
 
-		// Validate the fill and extract proof immediately (synchronously)
-		let fill_proof = match self.settlement.validate_fill(&order, &tx_hash).await {
-			Ok(proof) => proof,
-			Err(e) => {
-				tracing::error!(
-					order_id = %truncate_id(&order_id),
-					error = %e,
-					"Failed to validate fill"
-				);
-				return Ok(());
-			}
-		};
-
-		// Store the fill proof
-		if self
-			.storage
-			.store("fill_proofs", &order.id, &fill_proof)
-			.await
-			.is_err()
-		{
-			return Ok(());
-		}
-
-		// Now spawn a task to monitor claim readiness
+		// Spawn a task to validate fill and monitor claim readiness
 		let settlement = self.settlement.clone();
+		let storage = self.storage.clone();
 		let event_bus = self.event_bus.clone();
-		let order_clone = order.clone();
 		let timeout_minutes = self.config.solver.monitoring_timeout_minutes;
 
 		tokio::spawn(async move {
+			// Validate the fill and extract proof
+			let fill_proof = match settlement.validate_fill(&order, &tx_hash).await {
+				Ok(proof) => proof,
+				Err(e) => {
+					tracing::error!(
+						order_id = %truncate_id(&order_id),
+						error = %e,
+						"Failed to validate fill"
+					);
+					return;
+				}
+			};
+
+			// Store the fill proof
+			if storage
+				.store("fill_proofs", &order.id, &fill_proof)
+				.await
+				.is_err()
+			{
+				return;
+			}
+
+			// Monitor claim readiness
 			let monitoring_timeout = tokio::time::Duration::from_secs(timeout_minutes * 60);
 			let check_interval = tokio::time::Duration::from_secs(1); // Check every 1 second for faster claim detection
 			let start_time = tokio::time::Instant::now();
@@ -445,18 +478,23 @@ impl SolverEngine {
 			loop {
 				// Check if we've exceeded the timeout
 				if start_time.elapsed() > monitoring_timeout {
+					tracing::warn!(
+						order_id = %truncate_id(&order_id),
+						"Claim readiness monitoring timeout reached after {} minutes",
+						timeout_minutes
+					);
 					break;
 				}
 
 				// Check if we can claim
-				if settlement.can_claim(&order_clone, &fill_proof).await {
+				if settlement.can_claim(&order, &fill_proof).await {
 					tracing::info!(
 						order_id = %truncate_id(&order_id),
 						"Ready to claim"
 					);
 					event_bus
 						.publish(SolverEvent::Settlement(SettlementEvent::ClaimReady {
-							order_id: order_clone.id,
+							order_id: order.id,
 						}))
 						.ok();
 					break;
@@ -569,10 +607,9 @@ impl SolverEngine {
 
 	/// Builds the execution context for strategy decisions.
 	///
-	/// In production, this would fetch real-time data such as gas prices,
+	/// TODO: this should fetch real-time data such as gas prices,
 	/// solver balances, and other relevant market conditions.
 	async fn build_execution_context(&self) -> Result<ExecutionContext, SolverError> {
-		// In production, would fetch real data
 		Ok(ExecutionContext {
 			gas_price: U256::from(20_000_000_000u64), // 20 gwei
 			timestamp: std::time::SystemTime::now()
