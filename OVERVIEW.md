@@ -1,12 +1,10 @@
 # OIF Solver Overview
 
-## Summary
-
-The OIF Solver is a high-performance cross-chain order execution system designed for the Open Intents Framework. It discovers intents across multiple blockchains, validates and executes orders through optimal paths, and manages settlement processes. The solver operates as an autonomous service that monitors blockchain events, makes intelligent execution decisions, and ensures reliable transaction delivery across heterogeneous blockchain networks.
+The OIF Solver is a high-performance cross-chain order execution system designed for the Open Intents Framework. It discovers intents across multiple EVM chains, validates and executes orders through optimal paths, and manages settlement processes. The solver operates as an autonomous service that monitors blockchain events, makes intelligent execution decisions, and ensures reliable transaction delivery across networks.
 
 ## High-Level Project Structure
 
-The OIF Solver uses Rust for its performance-critical requirements in cross-chain transaction execution. Rust provides zero-cost abstractions for the modular architecture, compile-time guarantees for concurrent blockchain monitoring across multiple chains, and predictable latency without garbage collection pauses, essential when competing to execute orders. The memory safety guarantees are crucial when handling cryptographic operations simultaneously.
+The OIF Solver uses Rust for its performance-critical requirements in cross-chain transaction execution. Rust provides zero-cost abstractions for the modular architecture, compile-time guarantees for concurrent blockchain monitoring across multiple chains, and predictable latency without garbage collection pauses, essential when competing to execute orders. Additionally, the memory safety guarantees are crucial when handling cryptographic operations simultaneously.
 
 ```
 oif-solver/
@@ -40,7 +38,7 @@ oif-solver/
 - **solver-discovery**: Multi-chain event monitoring and intent detection
 - **solver-order**: Intent validation, strategy evaluation, and transaction generation
 - **solver-delivery**: Reliable transaction submission and confirmation monitoring
-- **solver-settlement**: Fill validation and claim transaction management
+- **solver-settlement**: Fill validation and oracle verification management
 
 ### Orchestration
 
@@ -51,28 +49,37 @@ oif-solver/
 
 ```mermaid
 sequenceDiagram
-    participant User as User/DApp
-    participant Origin as Origin Chain
+    participant External as External Sources
     participant Discovery as Discovery Service
     participant Core as Core Engine
+    participant Storage as Storage Service
     participant Order as Order Service
     participant Delivery as Delivery Service
-    participant Destination as Destination Chain
     participant Settlement as Settlement Service
 
-    User->>Origin: Submit Intent
-    Origin->>Discovery: Emit Intent Event
-    Discovery->>Core: New Intent Detected
-    Core->>Order: Validate & Strategy Check
+    Note over External,Settlement: Intent Discovery & Processing
+    External->>Discovery: New Intent Event
+    Discovery->>Core: Intent Discovered
+    Core->>Order: Validate Intent
+    Order->>Core: Validated Order
+    Core->>Storage: Store Order
+
+    Note over Core,Settlement: Intent Processing
+    Core->>Order: Check Execution Strategy
     Order->>Core: Execute Decision
-    Core->>Delivery: Submit Fill Transaction
-    Delivery->>Destination: Execute Fill
-    Destination->>Delivery: Transaction Confirmed
-    Delivery->>Core: Fill Complete
+    Core->>Order: Generate Fill Transaction
+    Order->>Core: Transaction Ready
+    Core->>Delivery: Submit Transaction
+    Delivery->>Core: Transaction Submitted
+
+    Note over Core,Settlement: Settlement Processing
+    Core->>Delivery: Monitor Transaction
+    Delivery->>Core: Transaction Confirmed
     Core->>Settlement: Validate Fill
-    Settlement->>Core: Ready to Claim
+    Settlement->>Core: Fill Validated
+    Core->>Order: Generate Claim
     Core->>Delivery: Submit Claim
-    Delivery->>Origin: Claim Rewards
+    Delivery->>Core: Claim Confirmed
 ```
 
 ## Module Deep Dive
@@ -188,7 +195,5 @@ sequenceDiagram
 ```
 
 ## Conclusion
-
-The OIF Solver represents a robust, performant solution for cross-chain order execution. Its modular architecture allows for easy extension and maintenance, while Rust's performance characteristics ensure it can compete effectively in the MEV-competitive environment of cross-chain execution. Each module can be used independently, making the solver both a complete solution and a toolkit for building custom cross-chain infrastructure.
 
 The event-driven architecture ensures responsive processing of intents, while the clear separation of concerns makes the system easy to understand and extend. Whether used as a complete solver or as individual components, the OIF Solver provides the building blocks for sophisticated cross-chain execution strategies.
