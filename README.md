@@ -76,77 +76,20 @@ The solver is built as a modular Rust workspace with clearly defined service bou
 
 ```
 oif-solver/
-├── Cargo.toml                       # Workspace definition
-├── crates/
-│   ├── solver-account/              # Account management and signing
-│   │   ├── src/
-│   │   │   ├── lib.rs               # Service interface
-│   │   │   └── implementations/
-│   │   │       └── local.rs         # Local key management
-│   │   └── Cargo.toml
-│   ├── solver-config/               # Configuration management
-│   │   ├── src/
-│   │   │   └── lib.rs               # Config structures and loading
-│   │   └── Cargo.toml
-│   ├── solver-core/                 # Core orchestration engine
-│   │   ├── src/
-│   │   │   ├── lib.rs               # Main solver engine
-│   │   │   └── event_bus.rs         # Event-driven communication
-│   │   └── Cargo.toml
-│   ├── solver-delivery/             # Transaction delivery service
-│   │   ├── src/
-│   │   │   ├── lib.rs               # Service interface
-│   │   │   └── implementations/
-│   │   │       └── evm/
-│   │   │           └── alloy.rs     # EVM chain delivery
-│   │   └── Cargo.toml
-│   ├── solver-discovery/            # Intent discovery service
-│   │   ├── src/
-│   │   │   ├── lib.rs               # Service interface
-│   │   │   └── implementations/
-│   │   │       └── onchain/
-│   │   │           └── _7683.rs     # EIP-7683 discovery
-│   │   └── Cargo.toml
-│   ├── solver-order/                # Order processing service
-│   │   ├── src/
-│   │   │   ├── lib.rs               # Service interface
-│   │   │   └── implementations/
-│   │   │       ├── standards/
-│   │   │       │   └── _7683.rs     # EIP-7683 orders
-│   │   │       └── strategies/
-│   │   │           └── simple.rs    # Simple execution strategy
-│   │   └── Cargo.toml
-│   ├── solver-service/              # Main binary
-│   │   ├── src/
-│   │   │   └── main.rs              # Entry point
-│   │   └── Cargo.toml
-│   ├── solver-settlement/           # Settlement service
-│   │   ├── src/
-│   │   │   ├── lib.rs               # Service interface
-│   │   │   └── implementations/
-│   │   │       └── direct.rs        # Direct settlement
-│   │   └── Cargo.toml
-│   ├── solver-storage/              # Storage abstraction
-│   │   ├── src/
-│   │   │   ├── lib.rs               # Service interface
-│   │   │   └── implementations/
-│   │   │       └── file.rs          # File-based storage
-│   │   └── Cargo.toml
-│   └── solver-types/                # Shared types
-│       ├── src/
-│       │   ├── lib.rs               # Type exports
-│       │   ├── order.rs             # Order types
-│       │   ├── discovery.rs         # Discovery types
-│       │   ├── delivery.rs          # Delivery types
-│       │   ├── settlement.rs        # Settlement types
-│       │   └── events.rs            # Event types
-│       └── Cargo.toml
-├── config/
-│   └── example.toml                 # Example configuration
-└── scripts/
-    └── demo/                        # Demo scripts
-        ├── setup_local_anvil.sh
-        └── send_intent.sh
+├── Cargo.toml                   # Workspace definition
+├── crates/                      # Modular components
+│   ├── solver-account/          # Cryptographic operations
+│   ├── solver-config/           # Configuration management
+│   ├── solver-core/             # Orchestration engine
+│   ├── solver-delivery/         # Transaction submission
+│   ├── solver-discovery/        # Intent monitoring
+│   ├── solver-order/            # Order processing
+│   ├── solver-service/          # Main executable
+│   ├── solver-settlement/       # Settlement verification
+│   ├── solver-storage/          # State persistence
+│   └── solver-types/            # Shared types
+├── config/                      # Configuration examples
+└── scripts/                     # Deployment and demo scripts
 ```
 
 ## Component Responsibilities
