@@ -448,8 +448,8 @@ impl SolverEngine {
 		let timeout_minutes = self.config.solver.monitoring_timeout_minutes;
 
 		tokio::spawn(async move {
-			// Validate the fill and extract proof
-			let fill_proof = match settlement.validate_fill(&order, &tx_hash).await {
+			// Retrieve and extract proof
+			let fill_proof = match settlement.get_attestation(&order, &tx_hash).await {
 				Ok(proof) => proof,
 				Err(e) => {
 					tracing::error!(

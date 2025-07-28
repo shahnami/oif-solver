@@ -154,7 +154,7 @@ sequenceDiagram
     participant Settlement as SettlementService
     participant Chain as Blockchain
 
-    Core->>Settlement: validate_fill(order, tx_hash)
+    Core->>Settlement: get_attestation(order, tx_hash)
     Settlement->>Chain: Get Transaction Receipt
     Settlement->>Settlement: Extract Fill Proof
     Settlement->>Core: Return Proof

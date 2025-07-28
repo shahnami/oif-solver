@@ -42,14 +42,14 @@ pub trait SettlementInterface: Send + Sync {
 	/// before initializing the settlement mechanism.
 	fn config_schema(&self) -> Box<dyn ConfigSchema>;
 
-	/// Validates a fill transaction and extracts proof data needed for claiming.
+	/// Gets attestation data for a filled order by extracting proof data needed for claiming.
 	///
 	/// This method should:
 	/// 1. Fetch the transaction receipt using the tx_hash
 	/// 2. Parse logs/events to extract fill details
 	/// 3. Verify the fill satisfies the order requirements
 	/// 4. Build a FillProof containing all data needed for claiming
-	async fn validate_fill(
+	async fn get_attestation(
 		&self,
 		order: &Order,
 		tx_hash: &TransactionHash,
@@ -80,11 +80,11 @@ impl SettlementService {
 		Self { implementations }
 	}
 
-	/// Validates a fill transaction using the appropriate settlement implementation.
+	/// Gets attestation for a filled order using the appropriate settlement implementation.
 	///
 	/// Selects the implementation based on the order's standard field
-	/// and delegates validation to that implementation.
-	pub async fn validate_fill(
+	/// and delegates attestation retrieval to that implementation.
+	pub async fn get_attestation(
 		&self,
 		order: &Order,
 		tx_hash: &TransactionHash,
@@ -94,7 +94,7 @@ impl SettlementService {
 			.get(&order.standard)
 			.ok_or_else(|| SettlementError::ValidationFailed("Unknown standard".into()))?;
 
-		implementation.validate_fill(order, tx_hash).await
+		implementation.get_attestation(order, tx_hash).await
 	}
 
 	/// Checks if an order can be claimed using the appropriate settlement implementation.

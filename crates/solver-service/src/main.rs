@@ -94,10 +94,8 @@ fn build_solver(config: Config) -> Result<SolverEngine, Box<dyn std::error::Erro
         // Delivery implementations
         .with_delivery_factory("origin", create_http_delivery)
         .with_delivery_factory("destination", create_http_delivery)
-
         // Discovery implementations
         .with_discovery_factory("origin_eip7683", create_discovery)
-        .with_discovery_factory("destination_eip7683", create_discovery)
         // Order implementations
         .with_order_factory("eip7683", create_order_impl)
         // Settlement implementations

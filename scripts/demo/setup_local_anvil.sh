@@ -405,11 +405,6 @@ rpc_url = "$ORIGIN_RPC_URL"
 # InputSettler address on origin chain (where orders are created)
 settler_addresses = ["$INPUT_SETTLER_ADDRESS"]
 
-[discovery.sources.destination_eip7683]
-rpc_url = "$DEST_RPC_URL"
-# OutputSettler address on destination chain (where orders are fulfilled)
-settler_addresses = ["$OUTPUT_SETTLER_ADDRESS"]
-
 [order]
 # EIP-7683 order implementations
 [order.implementations.eip7683]
