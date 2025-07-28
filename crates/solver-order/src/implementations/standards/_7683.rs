@@ -5,8 +5,7 @@
 //! filling and claiming orders.
 
 use crate::{OrderError, OrderInterface};
-use alloy_dyn_abi::DynSolValue;
-use alloy_primitives::{keccak256, Address as AlloyAddress, FixedBytes, U256};
+use alloy_primitives::{Address as AlloyAddress, FixedBytes, U256};
 use alloy_sol_types::{sol, SolCall, SolValue};
 use async_trait::async_trait;
 use serde::{Deserialize, Serialize};
@@ -34,12 +33,22 @@ sol! {
 		function fill(bytes32 orderId, bytes originData, bytes fillerData) external;
 	}
 
-	/// Function signature for finaliseSelf on InputSettler.
-	function finaliseSelf(
-		(address,uint256,uint256,uint32,uint32,address,uint256[2][],(bytes32,bytes32,uint256,bytes32,uint256,bytes32,bytes,bytes)[]) order,
-		uint32[] timestamps,
-		bytes32 solver
-	) external;
+	/// Order structure for finaliseSelf.
+	struct OrderStruct {
+		address user;
+		uint256 nonce;
+		uint256 originChainId;
+		uint32 expires;
+		uint32 fillDeadline;
+		address oracle;
+		uint256[2][] inputs;
+		MandateOutput[] outputs;
+	}
+
+	/// IInputSettler interface for finalizing orders.
+	interface IInputSettler {
+		function finaliseSelf(OrderStruct order, uint32[] timestamps, bytes32 solver) external;
+	}
 }
 
 /// EIP-7683 specific order data structure.
@@ -287,108 +296,98 @@ impl OrderInterface for Eip7683OrderImpl {
 			));
 		}
 
-		// Define the finaliseSelf function signature
-		let function_signature = "finaliseSelf((address,uint256,uint256,uint32,uint32,address,uint256[2][],(bytes32,bytes32,uint256,bytes32,uint256,bytes32,bytes,bytes)[]),uint32[],bytes32)";
-		let selector = &keccak256(function_signature.as_bytes())[..4];
-
 		// Parse addresses
 		let user_hex = order_data.user.trim_start_matches("0x");
 		let user_bytes = hex::decode(user_hex)
 			.map_err(|e| OrderError::ValidationFailed(format!("Invalid user address: {}", e)))?;
-		let mut user_address = [0u8; 20];
-		user_address.copy_from_slice(&user_bytes);
-
-		// Create inputs array from order data
-		let inputs_array: Vec<DynSolValue> = order_data
-			.inputs
-			.iter()
-			.map(|input| {
-				DynSolValue::FixedArray(vec![
-					DynSolValue::Uint(input[0], 256), // token as U256
-					DynSolValue::Uint(input[1], 256), // amount
-				])
-			})
-			.collect();
-
-		// Create outputs array (MandateOutput structs)
-		let outputs_array: Vec<DynSolValue> = order_data
-			.outputs
-			.iter()
-			.map(|output| {
-				// Convert addresses to bytes32
-				let oracle_bytes32 = [0u8; 32]; // No oracle
-
-				let mut settler_bytes32 = [0u8; 32];
-				if output.chain_id == order_data.origin_chain_id {
-					// Use input settler for origin chain
-					settler_bytes32[12..32].copy_from_slice(&self.input_settler_address.0);
-				} else {
-					// Use output settler for other chains
-					settler_bytes32[12..32].copy_from_slice(&self.output_settler_address.0);
-				}
-
-				let mut token_bytes32 = [0u8; 32];
-				let token_hex = output.token.trim_start_matches("0x");
-				let token_bytes = hex::decode(token_hex).unwrap_or_else(|_| vec![0; 20]);
-				token_bytes32[12..32].copy_from_slice(&token_bytes);
-
-				let mut recipient_bytes32 = [0u8; 32];
-				let recipient_hex = output.recipient.trim_start_matches("0x");
-				let recipient_bytes = hex::decode(recipient_hex).unwrap_or_else(|_| vec![0; 20]);
-				recipient_bytes32[12..32].copy_from_slice(&recipient_bytes);
-
-				DynSolValue::Tuple(vec![
-					DynSolValue::FixedBytes(FixedBytes::<32>::from(oracle_bytes32), 32),
-					DynSolValue::FixedBytes(FixedBytes::<32>::from(settler_bytes32), 32),
-					DynSolValue::Uint(U256::from(output.chain_id), 256),
-					DynSolValue::FixedBytes(FixedBytes::<32>::from(token_bytes32), 32),
-					DynSolValue::Uint(output.amount, 256),
-					DynSolValue::FixedBytes(FixedBytes::<32>::from(recipient_bytes32), 32),
-					DynSolValue::Bytes(vec![]), // call
-					DynSolValue::Bytes(vec![]), // context
-				])
-			})
-			.collect();
+		let user_address = AlloyAddress::from_slice(&user_bytes);
 
 		// Parse oracle address
 		let oracle_hex = fill_proof.oracle_address.trim_start_matches("0x");
 		let oracle_bytes = hex::decode(oracle_hex)
 			.map_err(|e| OrderError::ValidationFailed(format!("Invalid oracle address: {}", e)))?;
-		let mut oracle_address = [0u8; 20];
-		oracle_address.copy_from_slice(&oracle_bytes);
+		let oracle_address = AlloyAddress::from_slice(&oracle_bytes);
+
+		// Create inputs array from order data
+		let inputs: Vec<[U256; 2]> = order_data.inputs.clone();
+
+		// Create outputs array (MandateOutput structs)
+		let outputs: Vec<MandateOutput> = order_data
+			.outputs
+			.iter()
+			.map(|output| {
+				// Convert addresses to bytes32
+				let oracle_bytes32 = FixedBytes::<32>::from([0u8; 32]); // No oracle
+
+				let settler_bytes32 = {
+					let mut bytes32 = [0u8; 32];
+					if output.chain_id == order_data.origin_chain_id {
+						// Use input settler for origin chain
+						bytes32[12..32].copy_from_slice(&self.input_settler_address.0);
+					} else {
+						// Use output settler for other chains
+						bytes32[12..32].copy_from_slice(&self.output_settler_address.0);
+					}
+					FixedBytes::<32>::from(bytes32)
+				};
+
+				let token_bytes32 = {
+					let token_hex = output.token.trim_start_matches("0x");
+					let token_bytes = hex::decode(token_hex).unwrap_or_else(|_| vec![0; 20]);
+					let mut bytes32 = [0u8; 32];
+					bytes32[12..32].copy_from_slice(&token_bytes);
+					FixedBytes::<32>::from(bytes32)
+				};
+
+				let recipient_bytes32 = {
+					let recipient_hex = output.recipient.trim_start_matches("0x");
+					let recipient_bytes =
+						hex::decode(recipient_hex).unwrap_or_else(|_| vec![0; 20]);
+					let mut bytes32 = [0u8; 32];
+					bytes32[12..32].copy_from_slice(&recipient_bytes);
+					FixedBytes::<32>::from(bytes32)
+				};
+
+				MandateOutput {
+					oracle: oracle_bytes32,
+					settler: settler_bytes32,
+					chainId: U256::from(output.chain_id),
+					token: token_bytes32,
+					amount: output.amount,
+					recipient: recipient_bytes32,
+					call: vec![].into(),
+					context: vec![].into(),
+				}
+			})
+			.collect();
 
 		// Build the order struct
-		let order_struct = DynSolValue::Tuple(vec![
-			DynSolValue::Address(AlloyAddress::from_slice(&user_address)),
-			DynSolValue::Uint(U256::from(order_data.nonce), 256),
-			DynSolValue::Uint(U256::from(order_data.origin_chain_id), 256),
-			DynSolValue::Uint(U256::from(order_data.expires as u32), 256),
-			DynSolValue::Uint(U256::from(order_data.fill_deadline as u32), 256),
-			DynSolValue::Address(AlloyAddress::from_slice(&oracle_address)),
-			DynSolValue::Array(inputs_array),
-			DynSolValue::Array(outputs_array),
-		]);
+		let order_struct = OrderStruct {
+			user: user_address,
+			nonce: U256::from(order_data.nonce),
+			originChainId: U256::from(order_data.origin_chain_id),
+			expires: order_data.expires,
+			fillDeadline: order_data.fill_deadline,
+			oracle: oracle_address,
+			inputs,
+			outputs,
+		};
 
 		// Create timestamps array - use timestamp from fill proof
-		let fill_timestamp = fill_proof.filled_timestamp as u32;
-		let timestamps =
-			DynSolValue::Array(vec![DynSolValue::Uint(U256::from(fill_timestamp), 256)]);
+		let timestamps = vec![fill_proof.filled_timestamp as u32];
 
 		// Create solver bytes32
 		let mut solver_bytes32 = [0u8; 32];
 		solver_bytes32[12..32].copy_from_slice(&self.solver_address.0);
+		let solver = FixedBytes::<32>::from(solver_bytes32);
 
-		let solver_token = DynSolValue::FixedBytes(FixedBytes::<32>::from(solver_bytes32), 32);
-
-		// Encode parameters
-		let params = vec![order_struct, timestamps, solver_token];
-		let params_tuple = DynSolValue::Tuple(params);
-		let encoded_params = params_tuple.abi_encode_params();
-
-		// Build call data
-		let mut call_data = Vec::new();
-		call_data.extend_from_slice(selector);
-		call_data.extend_from_slice(&encoded_params);
+		// Encode the finaliseSelf call
+		let call_data = IInputSettler::finaliseSelfCall {
+			order: order_struct,
+			timestamps,
+			solver,
+		}
+		.abi_encode();
 
 		Ok(Transaction {
 			to: Some(self.input_settler_address.clone()),

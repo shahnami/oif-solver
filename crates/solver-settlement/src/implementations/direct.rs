@@ -1,7 +1,9 @@
-//! Settlement mechanism implementations for the solver service.
+//! Direct settlement implementation for testing purposes.
 //!
-//! This module provides concrete implementations of the SettlementInterface trait,
-//! handling fill validation and claim readiness checks for cross-chain orders.
+//! This module provides a basic implementation of the SettlementInterface trait
+//! intended for testing and development. It handles fill validation and claim
+//! readiness checks using simple transaction receipt verification without
+//! complex attestation mechanisms.
 
 use crate::{SettlementError, SettlementInterface};
 use alloy_primitives::{Address as AlloyAddress, FixedBytes};
@@ -107,11 +109,11 @@ impl SettlementInterface for DirectSettlement {
 		Box::new(DirectSettlementSchema)
 	}
 
-	/// Validates a fill transaction and generates a fill proof.
+	/// Gets attestation data for a filled order and generates a fill proof.
 	///
 	/// Since the transaction is already confirmed by the delivery service,
 	/// this method just extracts necessary data for claim generation.
-	async fn validate_fill(
+	async fn get_attestation(
 		&self,
 		order: &Order,
 		tx_hash: &TransactionHash,
@@ -145,10 +147,6 @@ impl SettlementInterface for DirectSettlement {
 			serde_json::from_value(order.data.clone()).map_err(|e| {
 				SettlementError::ValidationFailed(format!("Failed to parse order data: {}", e))
 			})?;
-
-		// TODO: parse logs to find the fill event
-		// and extract attestation data from oracle
-		// For now, we use a simple proof
 
 		// Get the block timestamp
 		let block = self

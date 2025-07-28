@@ -35,11 +35,6 @@ rpc_url = "http://localhost:8545"
 # InputSettler address on origin chain (where orders are created)
 settler_addresses = ["0xCf7Ed3AccA5a467e9e704C703E8D87F634fB0Fc9"]
 
-[discovery.sources.destination_eip7683]
-rpc_url = "http://localhost:8546"
-# OutputSettler address on destination chain (where orders are fulfilled)
-settler_addresses = ["0xe7f1725E7734CE288F8367e1Bb143E90bb3F0512"]
-
 [order]
 # EIP-7683 order implementations
 [order.implementations.eip7683]
