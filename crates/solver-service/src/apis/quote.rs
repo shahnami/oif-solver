@@ -226,16 +226,107 @@ pub async fn process_quote_request(
 ) -> Result<GetQuoteResponse, QuoteError> {
     info!("Processing quote request with {} inputs", request.available_inputs.len());
     
-    // 1. Validate the request
+    // {
+    //     availableInputs: [
+    //         {
+    //             asset: "ETH-0xaaaa",
+    //             amount: 110e6,
+    //             user: "ETH-pepe.eth"; // erc-7930 interoperable address
+    //             lockType:undefined,
+    //         },
+    //         {
+    //             asset: "ETH-0xbbb",
+    //             amount: 110e18,
+    //             user: "ETH-pepe.eth"; // erc-7930 interoperable address
+    //             lockType:undefined,
+    //         }
+    //     ],
+    //   requestedOutputs: [
+    //           {
+    //                 asset: "Base-0xaaaa",
+    //                 amount: 100e6,
+    //               user: "ETH-pepe.eth"; // erc-7930 interoperable address
+    //               calldata: "0xaaaabbbbfffff"
+    //             },
+    //         ],
+    //     minValidUntil: 1753885405,
+    //     preference: "price",
+    //   oracleWhitelist: undefined;
+    //   oracleBlacklist: undefined;
+    // }
+
+
+    // 1. Validate the request - simple validation (format, etc)
     validate_quote_request(&request)?;
     
-    // 2. Check solver capabilities
+    // 2. Check if is feasible:
     // TODO: Implement solver capability checking
+    // 2.1 Check if the solver has the tokens required for the quote (on that chain) - requestedOutputs.asset
+    // 2.2 Check if the solver has the balance required for the quote (on that chain) - requestedOutputs.amount
+    // 2.3 Check if the solver has the gas required for the quote (ETH) - if calldata is empty, then gas transaction is always the same.
+    // 2.4 Check if the solver has the time required for the quote (minValidUntil) - minValidUntil
+    // 2.5 Check if the solver has the network required for the quote - if the chain is not in the whitelist, then the quote is not valid
+    // 2.6 Check whitelist and blacklist of tokens - we need to match our list (Solver's list) with the availableInputs.asset
+    // 2.7 Check for the oracle whitelist and blacklist - we need to match our list (Solver's list) with the requestedOutputs.asset
+    // 2.8 determine if is escrow or resourceLock
+
+    // until here we need to check if the quote is ok to execute not considering the costs or time
     
+    // 3 Check Time and cost (we could do it in parallel)
+    // 3.1 Check the time required for the quote (ETA) - 
+    // 3.2 Check the cost required for the quote (ETH) - separate function for this
+    // 3.2.1 
+
+
+
+
+
+
+    // now we need to 
+
+
     // 3. Generate quotes based on available inputs and requested outputs
     let quotes = generate_quotes(&request).await?;
     
     info!("Generated {} quote options", quotes.len());
+
+    // we need to returns something like this:
+    // {
+    //     quotes:[
+    //             {
+    //                 orders:[
+    //                     {
+    //                         domain: "oif-input-settler",
+    //                         primaryType: "xxxx",
+    //                         message: "EIP 712 DataObject use 105 USDT with permit2 + witness with OIF order parameters"
+    //                     }
+    //                 ],
+    //                 details:{
+    //                     requestedOutputs: [
+    //                       {
+    //                             asset: "Base-0xaaaa",
+    //                             amount: 100e6,
+    //                           user: "ETH-pepe.eth"; // erc-7930 interoperable address
+    //                           calldata: "0xaaaabbbbfffff"
+    //                         }
+    //                     ],
+    //                     usedInputs:[
+    //                         {
+    //                             asset: "ETH-0xaaaa",
+    //                             amount: 105e6,
+    //                             user: "ETH-pepe.eth"; // erc-7930 interoperable address
+    //                             lockType:undefined,
+    //                         }
+    //                     ]
+    //                     oracle: "superSecureOracle"
+    //                 }
+    //                 validUntil: 1753885405,
+    //                 eta: 600,
+    //                 quoteId: "12345",
+    //                 provider: "PepeSolver"
+    //             },
+    //             ]
+    //     }
     
     Ok(GetQuoteResponse { quotes })
 }
@@ -313,8 +404,7 @@ async fn generate_quotes(request: &GetQuoteRequest) -> Result<Vec<QuoteOption>, 
     
     // For demo purposes, generate a basic quote
     // In a real implementation, this would:
-    // 1. Check solver balances and capabilities
-    // 2. Query current gas prices and market rates
+    // 1. Check solver balances and capabilities    // 2. Query current gas prices and market rates
     // 3. Calculate optimal routes and execution costs
     // 4. Generate settlement-specific order data
     
